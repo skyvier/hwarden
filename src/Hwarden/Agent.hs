@@ -2,6 +2,8 @@
 
 module Hwarden.Agent
   ( Bitwarden (..),
+    AgentState (..),
+    Decision (..),
     Password (..),
     Request (..),
     Response (..),
@@ -9,6 +11,8 @@ module Hwarden.Agent
     UnlockError (..),
     Username (..),
     cleanupSocket,
+    decide,
+    handleUnlock,
     handleRequest,
     handleRequestWith,
     prepareSocketDir,
@@ -18,9 +22,9 @@ module Hwarden.Agent
   )
 where
 
-import Control.Concurrent.MVar (MVar, newMVar, swapMVar)
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally)
-import Control.Monad (forever, void, when)
+import Control.Monad (forever, when)
 import Data.Aeson
   ( FromJSON (parseJSON),
     ToJSON (toJSON),
@@ -71,6 +75,11 @@ data Response
   | Failure Text
   deriving (Eq, Show)
 
+data AgentState
+  = Unauthenticated
+  | Unlocked SessionKey
+  deriving (Eq, Show)
+
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
     cmd <- obj .: "cmd"
@@ -99,7 +108,7 @@ runAgent = do
   prepareSocketDir socketDir
   removeExistingSocket socketPath
 
-  sessionVar <- newMVar Nothing
+  agentStateVar <- newMVar Unauthenticated
   sock <- socket AF_UNIX Stream defaultProtocol
   finally
     (do
@@ -107,7 +116,7 @@ runAgent = do
         listen sock maxListenQueue
         forever $ do
           (conn, _) <- accept sock
-          handleConnection sessionVar conn)
+          handleConnection agentStateVar conn)
     (close sock `finally` cleanupSocket socketPath)
 
 requireRuntimeDir :: IO FilePath
@@ -130,41 +139,52 @@ removeExistingSocket socketPath = do
 cleanupSocket :: FilePath -> IO ()
 cleanupSocket socketPath = removeExistingSocket socketPath
 
-handleConnection :: MVar (Maybe SessionKey) -> Socket -> IO ()
-handleConnection sessionVar conn =
+handleConnection :: MVar AgentState -> Socket -> IO ()
+handleConnection agentStateVar conn =
   finally
     (do
         raw <- recvAll conn
         response <-
           case eitherDecodeStrict' raw of
             Left err -> pure (Failure (T.pack err))
-            Right request -> handleRequest sessionVar request
+            Right request -> handleRequest agentStateVar request
         NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
     (close conn)
 
-handleRequest :: MVar (Maybe SessionKey) -> Request -> IO Response
-handleRequest sessionVar =
-  handleRequestWith storeSession
-  where
-    storeSession sessionKey = void (swapMVar sessionVar (Just sessionKey))
+handleRequest :: MVar AgentState -> Request -> IO Response
+handleRequest agentStateVar request =
+  modifyMVar agentStateVar $ handleRequestWith request
 
-handleRequestWith :: Bitwarden m => (SessionKey -> m ()) -> Request -> m Response
-handleRequestWith storeSession request =
-  case request of
-    UnlockRequest email password -> handleUnlock storeSession email password
-    UnknownRequest -> pure (Failure "unknown command")
 
-handleUnlock :: Bitwarden m => (SessionKey -> m ()) -> Username -> Password -> m Response
-handleUnlock storeSession email password = do
+handleRequestWith :: Bitwarden m => Request -> AgentState -> m (AgentState, Response)
+handleRequestWith request agentState =
+  case decide request agentState of
+    Unlock username password -> 
+      handleUnlock username password
+    Reply response -> pure (agentState, response)
+
+data Decision 
+  = Unlock Username Password
+  | Reply Response
+  deriving (Eq, Show)
+
+decide :: Request -> AgentState -> Decision
+decide (UnlockRequest username password) agentState =
+  case agentState of
+    Unlocked _ -> Reply (Success "already unlocked")
+    Unauthenticated -> Unlock username password
+decide UnknownRequest _ = Reply (Failure "unknown request")
+
+handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
+handleUnlock email password = do
   result <- unlock email password
   case result of
     Left UnlockUnavailable ->
-      pure (Failure "bw login failed")
+      pure (Unauthenticated, Failure "bw login failed")
     Left (UnlockFailed err) ->
-      pure (Failure (sanitizeError password err))
-    Right sessionKey -> do
-      storeSession sessionKey
-      pure (Success "unlocked")
+      pure (Unauthenticated, Failure (sanitizeError password err))
+    Right sessionKey ->
+      pure (Unlocked sessionKey, Success "unlocked")
 
 sanitizeError :: Password -> Text -> Text
 sanitizeError (Password password) err =

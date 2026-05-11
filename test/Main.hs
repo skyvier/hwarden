@@ -11,6 +11,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Bits ((.&.))
+import Data.List (isInfixOf)
 import Data.Text (Text)
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
@@ -56,7 +57,7 @@ import System.Process
     terminateProcess,
     waitForProcess
   )
-import Test.Tasty (TestTree, defaultMain, testGroup, withResource)
+import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 
 data Response = Response
@@ -76,105 +77,207 @@ instance Aeson.FromJSON Response where
     Response <$> obj Aeson..: "ok" <*> obj Aeson..:? "message" <*> obj Aeson..:? "error"
 
 newtype MockBitwarden a = MockBitwarden
-  { runWithUnlockResult :: Either Agent.UnlockError Agent.SessionKey -> a
+  { runMockBitwardenInternal :: MockEnv -> (MockEnv, a)
+  }
+
+data MockEnv = MockEnv
+  { unlockResult :: Either Agent.UnlockError Agent.SessionKey,
+    storedSessionKey :: Maybe Agent.SessionKey
   }
 
 instance Functor MockBitwarden where
-  fmap f (MockBitwarden run) = MockBitwarden (f . run)
+  fmap f (MockBitwarden run) =
+    MockBitwarden $ \mockEnv ->
+      let (mockEnv', value) = run mockEnv
+       in (mockEnv', f value)
 
 instance Applicative MockBitwarden where
-  pure value = MockBitwarden (\_ -> value)
+  pure value = MockBitwarden (\mockEnv -> (mockEnv, value))
   (<*>) = ap
 
 instance Monad MockBitwarden where
   MockBitwarden run >>= f =
-    MockBitwarden $ \result ->
-      let value = run result
+    MockBitwarden $ \mockEnv ->
+      let (mockEnv', value) = run mockEnv
           MockBitwarden next = f value
-       in next result
+       in next mockEnv'
 
 instance Bitwarden.Bitwarden MockBitwarden where
   unlock :: Agent.Username -> Agent.Password -> MockBitwarden (Either Agent.UnlockError Agent.SessionKey)
-  unlock _ _ = MockBitwarden id
+  unlock _ _ = MockBitwarden (\mockEnv -> (mockEnv, unlockResult mockEnv))
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
 tests =
-  withResource setupAgent cleanupAgent $ \getAgent ->
-    testGroup
-      "hwarden-agent"
-      [ testCase "request parser decodes unlock payload" $ do
-          let payload =
-                BS8.pack
-                  "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
-          Aeson.eitherDecodeStrict' payload
-            @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
-      , testCase "success response encoding matches golden file" $
-          assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
-      , testCase "failure response encoding matches golden file" $
-          assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
-      , testCase "prepareSocketDir creates missing directories with owner-only permissions" $ do
-          root <- createTempDir "hwarden-agent-test"
-          let socketDir = root </> "nested" </> "runtime" </> "hwarden"
-          Agent.prepareSocketDir socketDir
-          exists <- doesPathExist socketDir
-          assertBool "socket directory should exist" exists
-          assertDirectoryOwnerOnly socketDir
-          removeDirectoryRecursive root
-      , testCase "prepareSocketDir tightens existing directory permissions" $ do
-          root <- createTempDir "hwarden-agent-test"
-          let socketDir = root </> "hwarden"
-          createDirectoryIfMissing True socketDir
-          setFileMode socketDir 0o755
-          Agent.prepareSocketDir socketDir
-          assertDirectoryOwnerOnly socketDir
-          removeDirectoryRecursive root
-      , testCase "removeExistingSocket deletes an existing file" $ do
-          root <- createTempDir "hwarden-agent-test"
-          let staleSocketPath = root </> "agent.sock"
-          BS.writeFile staleSocketPath ""
-          Agent.removeExistingSocket staleSocketPath
-          exists <- doesPathExist staleSocketPath
-          assertBool "socket file should be deleted" (not exists)
-          removeDirectoryRecursive root
-      , testCase "removeExistingSocket succeeds when directory exists but socket file does not" $ do
-          root <- createTempDir "hwarden-agent-test"
-          let missingSocketPath = root </> "agent.sock"
-          Agent.removeExistingSocket missingSocketPath
-          exists <- doesPathExist missingSocketPath
-          assertBool "socket file should remain absent" (not exists)
-          removeDirectoryRecursive root
-      , testCase "removeExistingSocket succeeds when directory and socket file do not exist" $ do
-          root <- createTempDir "hwarden-agent-test"
-          let missingSocketPath = root </> "missing" </> "agent.sock"
-          Agent.removeExistingSocket missingSocketPath
-          exists <- doesPathExist missingSocketPath
-          assertBool "socket file should remain absent" (not exists)
-          removeDirectoryRecursive root
-      , testCase "handleRequestWith stores the session key from the Bitwarden effect" $ do
-          let response =
-                runMockBitwarden
-                  (Right (Agent.SessionKey "session-key"))
-                  (Agent.handleRequestWith rememberSession (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")))
-          response @?= Agent.Success "unlocked"
-      , testCase "handleRequestWith sanitizes Bitwarden errors" $ do
-          let response =
-                runMockBitwarden
-                  (Left (Agent.UnlockFailed "bad password: secret"))
-                  (Agent.handleRequestWith rememberSession (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")))
-          response @?= Agent.Failure "bad password: <redacted>"
-      , testCase "unlock returns invalid credentials" $ do
-          agent <- getAgent
-          response <- sendUnlock (socketPath agent)
-          assertBool "expected failure response" (not (ok response))
-          assertEqual "failure should not include success message" Nothing (message response)
-          assertEqual
-            "expected invalid credentials error"
-            (Just "credentials were incorrect")
-            (err response)
-      ]
+  testGroup
+    "hwarden-agent"
+    [ parsingTests,
+      encodingTests,
+      filesystemTests,
+      pureStateTransitionTests,
+      integrationTests
+    ]
+
+parsingTests :: TestTree
+parsingTests =
+  testGroup
+    "parsing"
+    [ testCase "request parser decodes unlock payload" $ do
+        let payload =
+              BS8.pack
+                "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
+        Aeson.eitherDecodeStrict' payload
+          @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+    ]
+
+encodingTests :: TestTree
+encodingTests =
+  testGroup
+    "encoding"
+    [ testCase "success response encoding matches golden file" $
+        assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
+    , testCase "failure response encoding matches golden file" $
+        assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
+    ]
+
+filesystemTests :: TestTree
+filesystemTests =
+  testGroup
+    "filesystem"
+    [ testCase "prepareSocketDir creates missing directories with owner-only permissions" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let socketDir = root </> "nested" </> "runtime" </> "hwarden"
+        Agent.prepareSocketDir socketDir
+        exists <- doesPathExist socketDir
+        assertBool "socket directory should exist" exists
+        assertDirectoryOwnerOnly socketDir
+        removeDirectoryRecursive root
+    , testCase "prepareSocketDir tightens existing directory permissions" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let socketDir = root </> "hwarden"
+        createDirectoryIfMissing True socketDir
+        setFileMode socketDir 0o755
+        Agent.prepareSocketDir socketDir
+        assertDirectoryOwnerOnly socketDir
+        removeDirectoryRecursive root
+    , testCase "removeExistingSocket deletes an existing file" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let staleSocketPath = root </> "agent.sock"
+        BS.writeFile staleSocketPath ""
+        Agent.removeExistingSocket staleSocketPath
+        exists <- doesPathExist staleSocketPath
+        assertBool "socket file should be deleted" (not exists)
+        removeDirectoryRecursive root
+    , testCase "removeExistingSocket succeeds when directory exists but socket file does not" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let missingSocketPath = root </> "agent.sock"
+        Agent.removeExistingSocket missingSocketPath
+        exists <- doesPathExist missingSocketPath
+        assertBool "socket file should remain absent" (not exists)
+        removeDirectoryRecursive root
+    , testCase "removeExistingSocket succeeds when directory and socket file do not exist" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let missingSocketPath = root </> "missing" </> "agent.sock"
+        Agent.removeExistingSocket missingSocketPath
+        exists <- doesPathExist missingSocketPath
+        assertBool "socket file should remain absent" (not exists)
+        removeDirectoryRecursive root
+    ]
+
+pureStateTransitionTests :: TestTree
+pureStateTransitionTests =
+  testGroup
+    "state transitions"
+    [ testGroup
+        "decide"
+        [ testCase "unauthenticated unlock request triggers unlock decision" $
+            Agent.decide
+              (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
+              Agent.Unauthenticated
+              @?= Agent.Unlock (Agent.Username "me@example.com") (Agent.Password "secret")
+        , testCase "unlock request while unlocked replies already unlocked" $
+            Agent.decide
+              (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
+              (Agent.Unlocked (Agent.SessionKey "session-key"))
+              @?= Agent.Reply (Agent.Success "already unlocked")
+        , testCase "unknown request replies with failure" $
+            Agent.decide Agent.UnknownRequest Agent.Unauthenticated
+              @?= Agent.Reply (Agent.Failure "unknown request")
+        ]
+    , testGroup
+        "handleRequestWith"
+        [ testCase "unlock request transitions to unlocked on success" $ do
+            let ((newState, response), mockState) =
+                  runMockBitwarden
+                    (Right (Agent.SessionKey "session-key"))
+                    (Agent.handleRequestWith (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")) Agent.Unauthenticated)
+            newState @?= Agent.Unlocked (Agent.SessionKey "session-key")
+            response @?= Agent.Success "unlocked"
+            storedSessionKey mockState @?= Nothing
+        , testCase "already unlocked request leaves state unchanged" $ do
+            let currentState = Agent.Unlocked (Agent.SessionKey "session-key")
+                ((newState, response), _) =
+                  runMockBitwarden
+                    (Left Agent.UnlockUnavailable)
+                    (Agent.handleRequestWith (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")) currentState)
+            newState @?= currentState
+            response @?= Agent.Success "already unlocked"
+        , testCase "unknown request leaves state unchanged" $ do
+            let ((newState, response), _) =
+                  runMockBitwarden
+                    (Left Agent.UnlockUnavailable)
+                    (Agent.handleRequestWith Agent.UnknownRequest Agent.Unauthenticated)
+            newState @?= Agent.Unauthenticated
+            response @?= Agent.Failure "unknown request"
+        ]
+    , testGroup
+        "handleUnlock"
+        [ testCase "unavailable unlock keeps state unauthenticated and redacts password" $ do
+            let ((newState, response), _) =
+                  runMockBitwarden
+                    (Left Agent.UnlockUnavailable)
+                    (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
+            newState @?= Agent.Unauthenticated
+            response @?= Agent.Failure "bw login failed"
+            assertNoPasswordLeak "secret" response
+        , testCase "failed unlock keeps state unauthenticated and redacts password" $ do
+            let ((newState, response), _) =
+                  runMockBitwarden
+                    (Left (Agent.UnlockFailed "bad password: secret"))
+                    (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
+            newState @?= Agent.Unauthenticated
+            response @?= Agent.Failure "bad password: <redacted>"
+            assertNoPasswordLeak "secret" response
+        , testCase "successful unlock transitions to unlocked and redacts session key in show output" $ do
+            let sessionKey = Agent.SessionKey "session-key"
+                ((newState, response), _) =
+                  runMockBitwarden
+                    (Right sessionKey)
+                    (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
+            newState @?= Agent.Unlocked sessionKey
+            response @?= Agent.Success "unlocked"
+            assertBool "response should not expose session key" (not ("session-key" `isInfixOf` show response))
+            assertBool "state show should redact session key" (not ("session-key" `isInfixOf` show newState))
+        ]
+    ]
+
+integrationTests :: TestTree
+integrationTests =
+  testGroup
+    "integration"
+    [ testCase "unlock returns invalid credentials" $ do
+        agent <- setupAgent
+        response <- sendUnlock (socketPath agent)
+        cleanupAgent agent
+        assertBool "expected failure response" (not (ok response))
+        assertEqual "failure should not include success message" Nothing (message response)
+        assertEqual
+          "expected invalid credentials error"
+          (Just "credentials were incorrect")
+          (err response)
+    ]
 
 setupAgent :: IO AgentResource
 setupAgent = do
@@ -278,11 +381,19 @@ createTempDir prefix = do
   createDirectoryIfMissing True tempPath
   pure tempPath
 
-runMockBitwarden :: Either Agent.UnlockError Agent.SessionKey -> MockBitwarden a -> a
-runMockBitwarden result (MockBitwarden run) = run result
+runMockBitwarden :: Either Agent.UnlockError Agent.SessionKey -> MockBitwarden a -> (a, MockEnv)
+runMockBitwarden result (MockBitwarden run) =
+  let initialEnv =
+        MockEnv
+          { unlockResult = result,
+            storedSessionKey = Nothing
+          }
+      (finalEnv, value) = run initialEnv
+   in (value, finalEnv)
 
-rememberSession :: Agent.SessionKey -> MockBitwarden ()
-rememberSession _ = pure ()
+assertNoPasswordLeak :: String -> Agent.Response -> IO ()
+assertNoPasswordLeak password response =
+  assertBool "response should not expose password" (not (password `isInfixOf` show response))
 
 assertGoldenEncoding :: FilePath -> Agent.Response -> IO ()
 assertGoldenEncoding goldenPath response = do
