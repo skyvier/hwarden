@@ -1,12 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Hwarden.Agent
-  ( Password (..),
+  ( Bitwarden (..),
+    Password (..),
     Request (..),
     Response (..),
     SessionKey (..),
+    UnlockError (..),
     Username (..),
     cleanupSocket,
+    handleRequest,
+    handleRequestWith,
     prepareSocketDir,
     removeExistingSocket,
     runAgent,
@@ -15,7 +19,7 @@ module Hwarden.Agent
 where
 
 import Control.Concurrent.MVar (MVar, newMVar, swapMVar)
-import Control.Exception (SomeException, finally, try)
+import Control.Exception (finally)
 import Control.Monad (forever, void, when)
 import Data.Aeson
   ( FromJSON (parseJSON),
@@ -30,7 +34,9 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
+import Hwarden.Bitwarden (Bitwarden (unlock), UnlockError (..))
 import Hwarden.Socket (recvAll)
+import Hwarden.Types (Password (..), SessionKey (..), Username (..))
 import Network.Socket
   ( Family (AF_UNIX),
     SockAddr (SockAddrUnix),
@@ -51,25 +57,9 @@ import System.Directory
     removePathForcibly
   )
 import System.Environment (lookupEnv)
-import System.Exit (ExitCode (ExitFailure, ExitSuccess), die)
+import System.Exit (die)
 import System.FilePath ((</>))
 import System.Posix.Files (ownerModes, setFileMode)
-import System.Process (readProcessWithExitCode)
-
-newtype SessionKey = SessionKey Text
-  deriving (Eq)
-
-instance Show SessionKey where
-  show _ = "[REDACTED]"
-
-newtype Username = Username Text
-  deriving (Eq, Show)
-
-newtype Password = Password Text
-  deriving (Eq)
-
-instance Show Password where
-  show _ = "[REDACTED]"
 
 data Request
   = UnlockRequest Username Password
@@ -153,28 +143,28 @@ handleConnection sessionVar conn =
     (close conn)
 
 handleRequest :: MVar (Maybe SessionKey) -> Request -> IO Response
-handleRequest sessionVar request =
+handleRequest sessionVar =
+  handleRequestWith storeSession
+  where
+    storeSession sessionKey = void (swapMVar sessionVar (Just sessionKey))
+
+handleRequestWith :: Bitwarden m => (SessionKey -> m ()) -> Request -> m Response
+handleRequestWith storeSession request =
   case request of
-    UnlockRequest email password -> unlock sessionVar email password
+    UnlockRequest email password -> handleUnlock storeSession email password
     UnknownRequest -> pure (Failure "unknown command")
 
-unlock :: MVar (Maybe SessionKey) -> Username -> Password -> IO Response
-unlock sessionVar (Username email) password@(Password passwordText) = do
-  let args = [T.unpack email, T.unpack passwordText, "--raw"]
-  result <-
-    try (readProcessWithExitCode "bw" ("login" : args) "") ::
-      IO (Either SomeException (ExitCode, String, String))
+handleUnlock :: Bitwarden m => (SessionKey -> m ()) -> Username -> Password -> m Response
+handleUnlock storeSession email password = do
+  result <- unlock email password
   case result of
-    Left _ ->
+    Left UnlockUnavailable ->
       pure (Failure "bw login failed")
-    Right (exitCode, stdoutText, stderrText) ->
-      case exitCode of
-        ExitSuccess -> do
-          let sessionKey = SessionKey (T.strip (T.pack stdoutText))
-          void (swapMVar sessionVar (Just sessionKey))
-          pure (Success "unlocked")
-        ExitFailure _ ->
-          pure (Failure (sanitizeError password (T.pack stderrText)))
+    Left (UnlockFailed err) ->
+      pure (Failure (sanitizeError password err))
+    Right sessionKey -> do
+      storeSession sessionKey
+      pure (Success "unlocked")
 
 sanitizeError :: Password -> Text -> Text
 sanitizeError (Password password) err =

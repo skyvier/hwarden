@@ -1,9 +1,11 @@
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
+import Control.Monad (ap)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
@@ -11,6 +13,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Bits ((.&.))
 import Data.Text (Text)
 import qualified Hwarden.Agent as Agent
+import qualified Hwarden.Bitwarden as Bitwarden
 import Hwarden.Socket (recvAll)
 import Network.Socket
   ( Family (AF_UNIX),
@@ -72,6 +75,28 @@ instance Aeson.FromJSON Response where
   parseJSON = Aeson.withObject "Response" $ \obj ->
     Response <$> obj Aeson..: "ok" <*> obj Aeson..:? "message" <*> obj Aeson..:? "error"
 
+newtype MockBitwarden a = MockBitwarden
+  { runWithUnlockResult :: Either Agent.UnlockError Agent.SessionKey -> a
+  }
+
+instance Functor MockBitwarden where
+  fmap f (MockBitwarden run) = MockBitwarden (f . run)
+
+instance Applicative MockBitwarden where
+  pure value = MockBitwarden (\_ -> value)
+  (<*>) = ap
+
+instance Monad MockBitwarden where
+  MockBitwarden run >>= f =
+    MockBitwarden $ \result ->
+      let value = run result
+          MockBitwarden next = f value
+       in next result
+
+instance Bitwarden.Bitwarden MockBitwarden where
+  unlock :: Agent.Username -> Agent.Password -> MockBitwarden (Either Agent.UnlockError Agent.SessionKey)
+  unlock _ _ = MockBitwarden id
+
 main :: IO ()
 main = defaultMain tests
 
@@ -128,6 +153,18 @@ tests =
           exists <- doesPathExist missingSocketPath
           assertBool "socket file should remain absent" (not exists)
           removeDirectoryRecursive root
+      , testCase "handleRequestWith stores the session key from the Bitwarden effect" $ do
+          let response =
+                runMockBitwarden
+                  (Right (Agent.SessionKey "session-key"))
+                  (Agent.handleRequestWith rememberSession (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")))
+          response @?= Agent.Success "unlocked"
+      , testCase "handleRequestWith sanitizes Bitwarden errors" $ do
+          let response =
+                runMockBitwarden
+                  (Left (Agent.UnlockFailed "bad password: secret"))
+                  (Agent.handleRequestWith rememberSession (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")))
+          response @?= Agent.Failure "bad password: <redacted>"
       , testCase "unlock returns invalid credentials" $ do
           agent <- getAgent
           response <- sendUnlock (socketPath agent)
@@ -240,6 +277,12 @@ createTempDir prefix = do
   removeFile tempPath
   createDirectoryIfMissing True tempPath
   pure tempPath
+
+runMockBitwarden :: Either Agent.UnlockError Agent.SessionKey -> MockBitwarden a -> a
+runMockBitwarden result (MockBitwarden run) = run result
+
+rememberSession :: Agent.SessionKey -> MockBitwarden ()
+rememberSession _ = pure ()
 
 assertGoldenEncoding :: FilePath -> Agent.Response -> IO ()
 assertGoldenEncoding goldenPath response = do
