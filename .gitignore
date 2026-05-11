@@ -8,3 +8,4 @@ cabal.project.local~
 
 *~
 .DS_Store
+.env
