@@ -5,14 +5,17 @@ module Main where
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Data.Aeson as Aeson
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
+import Data.Bits ((.&.))
 import Data.Text (Text)
+import qualified Hwarden.Agent as Agent
+import Hwarden.Socket (recvAll)
 import Network.Socket
   ( Family (AF_UNIX),
     ShutdownCmd (ShutdownSend),
     SockAddr (SockAddrUnix),
-    Socket,
     SocketType (Stream),
     close,
     connect,
@@ -23,9 +26,9 @@ import Network.Socket
 import qualified Network.Socket.ByteString as NBS
 import System.Directory
   ( Permissions (executable),
-    createDirectory,
     createDirectoryIfMissing,
     doesFileExist,
+    doesPathExist,
     findExecutable,
     getPermissions,
     getTemporaryDirectory,
@@ -36,6 +39,11 @@ import System.Directory
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose, openTempFile)
+import System.Posix.Files
+  ( fileMode,
+    getFileStatus,
+    setFileMode
+  )
 import System.Process
   ( CreateProcess (cwd, env, std_err, std_out),
     ProcessHandle,
@@ -46,7 +54,7 @@ import System.Process
     waitForProcess
   )
 import Test.Tasty (TestTree, defaultMain, testGroup, withResource)
-import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
+import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 
 data Response = Response
   { ok :: Bool,
@@ -72,7 +80,55 @@ tests =
   withResource setupAgent cleanupAgent $ \getAgent ->
     testGroup
       "hwarden-agent"
-      [ testCase "unlock returns invalid credentials" $ do
+      [ testCase "request parser decodes unlock payload" $ do
+          let payload =
+                BS8.pack
+                  "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
+          Aeson.eitherDecodeStrict' payload
+            @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+      , testCase "success response encoding matches golden file" $
+          assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
+      , testCase "failure response encoding matches golden file" $
+          assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
+      , testCase "prepareSocketDir creates missing directories with owner-only permissions" $ do
+          root <- createTempDir "hwarden-agent-test"
+          let socketDir = root </> "nested" </> "runtime" </> "hwarden"
+          Agent.prepareSocketDir socketDir
+          exists <- doesPathExist socketDir
+          assertBool "socket directory should exist" exists
+          assertDirectoryOwnerOnly socketDir
+          removeDirectoryRecursive root
+      , testCase "prepareSocketDir tightens existing directory permissions" $ do
+          root <- createTempDir "hwarden-agent-test"
+          let socketDir = root </> "hwarden"
+          createDirectoryIfMissing True socketDir
+          setFileMode socketDir 0o755
+          Agent.prepareSocketDir socketDir
+          assertDirectoryOwnerOnly socketDir
+          removeDirectoryRecursive root
+      , testCase "removeExistingSocket deletes an existing file" $ do
+          root <- createTempDir "hwarden-agent-test"
+          let staleSocketPath = root </> "agent.sock"
+          BS.writeFile staleSocketPath ""
+          Agent.removeExistingSocket staleSocketPath
+          exists <- doesPathExist staleSocketPath
+          assertBool "socket file should be deleted" (not exists)
+          removeDirectoryRecursive root
+      , testCase "removeExistingSocket succeeds when directory exists but socket file does not" $ do
+          root <- createTempDir "hwarden-agent-test"
+          let missingSocketPath = root </> "agent.sock"
+          Agent.removeExistingSocket missingSocketPath
+          exists <- doesPathExist missingSocketPath
+          assertBool "socket file should remain absent" (not exists)
+          removeDirectoryRecursive root
+      , testCase "removeExistingSocket succeeds when directory and socket file do not exist" $ do
+          root <- createTempDir "hwarden-agent-test"
+          let missingSocketPath = root </> "missing" </> "agent.sock"
+          Agent.removeExistingSocket missingSocketPath
+          exists <- doesPathExist missingSocketPath
+          assertBool "socket file should remain absent" (not exists)
+          removeDirectoryRecursive root
+      , testCase "unlock returns invalid credentials" $ do
           agent <- getAgent
           response <- sendUnlock (socketPath agent)
           assertBool "expected failure response" (not (ok response))
@@ -152,15 +208,6 @@ sendUnlock agentSocketPath =
     requestBody =
       BS8.pack "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
 
-recvAll :: Socket -> IO BS8.ByteString
-recvAll conn = go []
-  where
-    go acc = do
-      chunk <- NBS.recv conn 4096
-      if BS8.null chunk
-        then pure (BS8.concat (reverse acc))
-        else go (chunk : acc)
-
 writeFakeBw :: FilePath -> IO ()
 writeFakeBw fakeBinDir = do
   let fakeBw = fakeBinDir </> "bw"
@@ -191,5 +238,17 @@ createTempDir prefix = do
   (tempPath, tempHandle) <- openTempFile tempBase prefix
   hClose tempHandle
   removeFile tempPath
-  createDirectory tempPath
+  createDirectoryIfMissing True tempPath
   pure tempPath
+
+assertGoldenEncoding :: FilePath -> Agent.Response -> IO ()
+assertGoldenEncoding goldenPath response = do
+  expected <- BS.readFile goldenPath
+  let normalizedExpected = BS8.dropWhileEnd (== '\n') expected
+  LBS.toStrict (Aeson.encode response) @?= normalizedExpected
+
+assertDirectoryOwnerOnly :: FilePath -> IO ()
+assertDirectoryOwnerOnly path = do
+  status <- getFileStatus path
+  let permissionBits = fileMode status .&. 0o777
+  assertEqual "directory mode should be 0700" 0o700 permissionBits
