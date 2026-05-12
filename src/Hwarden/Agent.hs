@@ -64,6 +64,7 @@ import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.FilePath ((</>))
 import System.Posix.Files (ownerModes, setFileMode)
+import Test.QuickCheck (Arbitrary (arbitrary))
 
 data Request
   = UnlockRequest Username Password
@@ -79,6 +80,13 @@ data AgentState
   = Locked
   | Unlocked SessionKey
   deriving (Eq, Show)
+
+instance Arbitrary AgentState where
+  arbitrary =
+    propertyState <$> arbitrary
+    where
+      propertyState Nothing = Locked
+      propertyState (Just sessionKey) = Unlocked sessionKey
 
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
@@ -98,6 +106,13 @@ instance ToJSON Response where
       [ "ok" .= False,
         "error" .= err
       ]
+
+instance FromJSON Response where
+  parseJSON = withObject "Response" $ \obj -> do
+    ok <- obj .: "ok"
+    if ok
+      then Success <$> obj .: "message"
+      else Failure <$> obj .: "error"
 
 runAgent :: IO ()
 runAgent = do

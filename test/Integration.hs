@@ -7,7 +7,7 @@ import Control.Exception (bracket)
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
-import Data.Text (Text)
+import qualified Hwarden.Agent as Agent
 import Hwarden.Socket (recvAll)
 import Network.Socket
   ( Family (AF_UNIX),
@@ -47,21 +47,11 @@ import System.Process
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
 
-data Response = Response
-  { ok :: Bool,
-    message :: Maybe Text,
-    err :: Maybe Text
-  }
-
 data AgentResource = AgentResource
   { socketPath :: FilePath,
     processHandle :: ProcessHandle,
     tempRoot :: FilePath
   }
-
-instance Aeson.FromJSON Response where
-  parseJSON = Aeson.withObject "Response" $ \obj ->
-    Response <$> obj Aeson..: "ok" <*> obj Aeson..:? "message" <*> obj Aeson..:? "error"
 
 integrationTests :: TestTree
 integrationTests =
@@ -71,12 +61,11 @@ integrationTests =
         agent <- setupAgent
         response <- sendUnlock (socketPath agent)
         cleanupAgent agent
-        assertBool "expected failure response" (not (ok response))
-        assertEqual "failure should not include success message" Nothing (message response)
+        assertBool "expected failure response" (response /= Agent.Success "unlocked")
         assertEqual
           "expected invalid credentials error"
-          (Just "credentials were incorrect")
-          (err response)
+          (Agent.Failure "credentials were incorrect")
+          response
     ]
 
 setupAgent :: IO AgentResource
@@ -131,7 +120,7 @@ waitForSocket agentSocketPath = go (200 :: Int)
         then pure ()
         else threadDelay 50000 >> go (retries - 1)
 
-sendUnlock :: FilePath -> IO Response
+sendUnlock :: FilePath -> IO Agent.Response
 sendUnlock agentSocketPath =
   bracket open close $ \conn -> do
     NBS.sendAll conn requestBody
