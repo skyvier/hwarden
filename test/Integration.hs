@@ -57,9 +57,17 @@ integrationTests :: TestTree
 integrationTests =
   testGroup
     "integration"
-    [ testCase "sending invalid credentials via the socket results in failure message" $ do
+    [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
         agent <- setupAgent
-        response <- sendUnlock (socketPath agent)
+        response <- sendRequest (socketPath agent) "{\"cmd\":\"status\"}"
+        cleanupAgent agent
+        assertEqual
+          "expected locked status response"
+          (Agent.Success "locked")
+          response
+    , testCase "sending invalid credentials via the socket results in failure message" $ do
+        agent <- setupAgent
+        response <- sendRequest (socketPath agent) "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
         cleanupAgent agent
         assertBool "expected failure response" (response /= Agent.Success "unlocked")
         assertEqual
@@ -120,10 +128,10 @@ waitForSocket agentSocketPath = go (200 :: Int)
         then pure ()
         else threadDelay 50000 >> go (retries - 1)
 
-sendUnlock :: FilePath -> IO Agent.Response
-sendUnlock agentSocketPath =
+sendRequest :: FilePath -> String -> IO Agent.Response
+sendRequest agentSocketPath requestBody =
   bracket open close $ \conn -> do
-    NBS.sendAll conn requestBody
+    NBS.sendAll conn (BS8.pack requestBody)
     shutdown conn ShutdownSend
     responseBytes <- recvAll conn
     case Aeson.eitherDecode (LBS.fromStrict responseBytes) of
@@ -134,8 +142,6 @@ sendUnlock agentSocketPath =
       conn <- socket AF_UNIX Stream defaultProtocol
       connect conn (SockAddrUnix agentSocketPath)
       pure conn
-    requestBody =
-      BS8.pack "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
 
 writeFakeBw :: FilePath -> IO ()
 writeFakeBw fakeBinDir = do
