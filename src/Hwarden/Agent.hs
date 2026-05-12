@@ -76,7 +76,7 @@ data Response
   deriving (Eq, Show)
 
 data AgentState
-  = Unauthenticated
+  = Locked
   | Unlocked SessionKey
   deriving (Eq, Show)
 
@@ -108,7 +108,7 @@ runAgent = do
   prepareSocketDir socketDir
   removeExistingSocket socketPath
 
-  agentStateVar <- newMVar Unauthenticated
+  agentStateVar <- newMVar Locked
   sock <- socket AF_UNIX Stream defaultProtocol
   finally
     (do
@@ -172,7 +172,7 @@ decide :: Request -> AgentState -> Decision
 decide (UnlockRequest username password) agentState =
   case agentState of
     Unlocked _ -> Reply (Success "already unlocked")
-    Unauthenticated -> Unlock username password
+    Locked -> Unlock username password
 decide UnknownRequest _ = Reply (Failure "unknown request")
 
 handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
@@ -180,9 +180,9 @@ handleUnlock email password = do
   result <- unlock email password
   case result of
     Left UnlockUnavailable ->
-      pure (Unauthenticated, Failure "bw login failed")
+      pure (Locked, Failure "bw login failed")
     Left (UnlockFailed err) ->
-      pure (Unauthenticated, Failure (sanitizeError password err))
+      pure (Locked, Failure (sanitizeError password err))
     Right sessionKey ->
       pure (Unlocked sessionKey, Success "unlocked")
 
