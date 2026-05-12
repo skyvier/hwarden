@@ -18,7 +18,7 @@ $XDG_RUNTIME_DIR/hwarden/agent.sock
 
 The directory is created if needed and forced to mode `0700`.
 
-## Manual testing with socat
+## Manual testing with nc
 
 Start the agent in one terminal:
 
@@ -30,8 +30,10 @@ Send an unlock request from another terminal:
 
 ```sh
 printf '{"cmd":"unlock","email":"me@example.com","password":"MY_PASSWORD"}' \
-  | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/hwarden/agent.sock
+  | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
 ```
+
+`-N` is important here: the agent reads until EOF before decoding the request and writing the response.
 
 Expected success:
 
@@ -49,7 +51,7 @@ Unknown command:
 
 ```sh
 printf '{"cmd":"nope"}' \
-  | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/hwarden/agent.sock
+  | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
 ```
 
 Expected response:
