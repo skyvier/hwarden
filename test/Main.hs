@@ -82,6 +82,10 @@ parsingTests =
                 "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
         Aeson.eitherDecodeStrict' payload
           @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+    , testCase "request parser decodes status payload" $ do
+        let payload = BS8.pack "{\"cmd\":\"status\"}"
+        Aeson.eitherDecodeStrict' payload
+          @?= Right Agent.Status
     ]
 
 encodingTests :: TestTree
@@ -149,11 +153,16 @@ pureStateTransitionTests =
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
               Agent.Locked
               @?= Agent.Unlock (Agent.Username "me@example.com") (Agent.Password "secret")
+        , testCase "given a locked state, a status request replies locked" $
+            Agent.decide Agent.Status Agent.Locked
+              @?= Agent.Reply (Agent.Success "locked")
         , testCase "given an unlocked state, an unlock request replies already unlocked" $
             Agent.decide
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
               (Agent.Unlocked (Agent.SessionKey "session-key"))
               @?= Agent.Reply (Agent.Success "already unlocked")
+        , testProperty "given an unlocked state, a status request replies unlocked" $
+            propertyDecideStatusUnlocked
         , testCase "given any state, an unknown request replies with failure" $
             Agent.decide Agent.UnknownRequest Agent.Locked
               @?= Agent.Reply (Agent.Failure "unknown request")
@@ -162,10 +171,22 @@ pureStateTransitionTests =
         "handleRequestWith"
         [ testProperty "given a locked state, successful unlock action transitions state to unlocked" $
             propertyHandleRequestWithUnlockSuccess
+        , testCase "given a locked state, a status request returns locked" $
+            let (newState, response) =
+                  runMockBitwarden
+                    (MockEnv (Left Agent.UnlockUnavailable))
+                    (Agent.handleRequestWith Agent.Status Agent.Locked)
+             in do
+                  newState @?= Agent.Locked
+                  response @?= Agent.Success "locked"
+        , testProperty "given an unlocked state, a status request returns unlocked" $
+            propertyHandleRequestWithStatusUnlocked
         , testProperty "given an unlocked state, an unlock action leaves the state unchanged regardless of the result of the unlock action" $
             propertyHandleRequestWithUnlockedIgnoresUnlockResult
         , testProperty "given any initial state, an unknown request leaves the state unchanged regardless of the result of the unlock action" $
             propertyHandleRequestWithUnknownRequest
+        , testProperty "given any state, the encoded status response never exposes the session key" $
+            propertyHandleRequestWithStatusDoesNotExposeSessionKey
         ]
     , testGroup
         "handleUnlock"
@@ -186,6 +207,23 @@ propertyHandleRequestWithUnlockSuccess sessionKey =
         newState == Agent.Unlocked sessionKey
           && response == Agent.Success "unlocked"
 
+propertyDecideStatusUnlocked :: Agent.SessionKey -> Property
+propertyDecideStatusUnlocked sessionKey =
+  property $
+    Agent.decide Agent.Status (Agent.Unlocked sessionKey)
+      == Agent.Reply (Agent.Success "unlocked")
+
+propertyHandleRequestWithStatusUnlocked :: Agent.SessionKey -> Property
+propertyHandleRequestWithStatusUnlocked sessionKey =
+  let currentState = Agent.Unlocked sessionKey
+      (newState, response) =
+        runMockBitwarden
+          (MockEnv (Left Agent.UnlockUnavailable))
+          (Agent.handleRequestWith Agent.Status currentState)
+   in property $
+        newState == currentState
+          && response == Agent.Success "unlocked"
+
 propertyHandleRequestWithUnlockedIgnoresUnlockResult :: Agent.SessionKey -> MockEnv -> Property
 propertyHandleRequestWithUnlockedIgnoresUnlockResult sessionKey mockEnv =
   let currentState = Agent.Unlocked sessionKey
@@ -204,6 +242,17 @@ propertyHandleRequestWithUnknownRequest initialState mockEnv =
    in property $
         newState == initialState
           && response == Agent.Failure "unknown request"
+
+propertyHandleRequestWithStatusDoesNotExposeSessionKey :: Agent.AgentState -> Property
+propertyHandleRequestWithStatusDoesNotExposeSessionKey initialState =
+  let (newState, response) =
+        runMockBitwarden
+          (MockEnv (Left Agent.UnlockUnavailable))
+          (Agent.handleRequestWith Agent.Status initialState)
+   in property $
+        newState == initialState
+          && statusResponseMatchesState initialState response
+          && not (statusResponseLeaksSessionKey initialState response)
 
 propertyHandleUnlockFailure :: Agent.UnlockError -> Property
 propertyHandleUnlockFailure unlockError =
@@ -229,6 +278,17 @@ propertyHandleUnlockSuccess sessionKey =
 expectedFailure :: Agent.UnlockError -> Agent.Response
 expectedFailure Agent.UnlockUnavailable = Agent.Failure "bw login failed"
 expectedFailure (Agent.UnlockFailed err) = Agent.Failure (Agent.sanitizeError (Agent.Password "secret") err)
+
+statusResponseMatchesState :: Agent.AgentState -> Agent.Response -> Bool
+statusResponseMatchesState Agent.Locked response = response == Agent.Success "locked"
+statusResponseMatchesState (Agent.Unlocked _) response = response == Agent.Success "unlocked"
+
+statusResponseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
+statusResponseLeaksSessionKey Agent.Locked _ = False
+statusResponseLeaksSessionKey (Agent.Unlocked (Agent.SessionKey sessionKey)) response =
+  BS8.pack sessionText `BS.isInfixOf` encodedResponse response
+  where
+    sessionText = show sessionKey
 
 runMockBitwarden :: MockEnv -> MockBitwarden a -> a
 runMockBitwarden mockEnv (MockBitwarden run) = run mockEnv
