@@ -12,11 +12,19 @@ import qualified Data.Text as T
 import Hwarden.Types (Password (Password), SessionKey (SessionKey), Username (Username))
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.Process (readProcessWithExitCode)
+import Test.QuickCheck (Arbitrary (arbitrary), oneof)
 
 data UnlockError
   = UnlockUnavailable
   | UnlockFailed Text
   deriving (Eq, Show)
+
+instance Arbitrary UnlockError where
+  arbitrary =
+    oneof
+      [ pure UnlockUnavailable,
+        UnlockFailed . T.pack <$> arbitrary
+      ]
 
 class Monad m => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
