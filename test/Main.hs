@@ -59,6 +59,7 @@ import System.Process
   )
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
+import Test.QuickCheck (Arbitrary (arbitrary))
 
 data Response = Response
   { ok :: Bool,
@@ -84,6 +85,9 @@ data MockEnv = MockEnv
   { unlockResult :: Either Agent.UnlockError Agent.SessionKey,
     storedSessionKey :: Maybe Agent.SessionKey
   }
+
+instance Arbitrary MockEnv where
+  arbitrary = MockEnv <$> arbitrary <*> arbitrary
 
 instance Functor MockBitwarden where
   fmap f (MockBitwarden run) =
