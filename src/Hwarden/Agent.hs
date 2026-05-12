@@ -68,6 +68,7 @@ import Test.QuickCheck (Arbitrary (arbitrary))
 
 data Request
   = UnlockRequest Username Password
+  | Status
   | UnknownRequest
   deriving (Eq, Show)
 
@@ -93,6 +94,7 @@ instance FromJSON Request where
     cmd <- obj .: "cmd"
     case (cmd :: Text) of
       "unlock" -> UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
+      "status" -> pure Status
       _ -> pure UnknownRequest
 
 instance ToJSON Response where
@@ -188,6 +190,10 @@ decide (UnlockRequest username password) agentState =
   case agentState of
     Unlocked _ -> Reply (Success "already unlocked")
     Locked -> Unlock username password
+decide Status agentState =
+  case agentState of
+    Locked -> Reply (Success "locked")
+    Unlocked _ -> Reply (Success "unlocked")
 decide UnknownRequest _ = Reply (Failure "unknown request")
 
 handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
