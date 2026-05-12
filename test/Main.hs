@@ -38,20 +38,8 @@ newtype MockEnv = MockEnv
   }
   deriving (Eq, Show)
 
-newtype AnyAgentState = AnyAgentState
-  { getAnyAgentState :: Agent.AgentState
-  }
-  deriving (Eq, Show)
-
 instance Arbitrary MockEnv where
   arbitrary = MockEnv <$> arbitrary
-
-instance Arbitrary AnyAgentState where
-  arbitrary =
-    AnyAgentState . propertyState <$> arbitrary
-    where
-      propertyState Nothing = Agent.Locked
-      propertyState (Just sessionKey) = Agent.Unlocked sessionKey
 
 instance Functor MockBitwarden where
   fmap f (MockBitwarden run) = MockBitwarden (f . run)
@@ -197,7 +185,6 @@ propertyHandleRequestWithUnlockSuccess sessionKey =
    in property $
         newState == Agent.Unlocked sessionKey
           && response == Agent.Success "unlocked"
-          && encodedResponse response == encodedResponse (Agent.Success "unlocked")
 
 propertyHandleRequestWithUnlockedIgnoresUnlockResult :: Agent.SessionKey -> MockEnv -> Property
 propertyHandleRequestWithUnlockedIgnoresUnlockResult sessionKey mockEnv =
@@ -210,8 +197,8 @@ propertyHandleRequestWithUnlockedIgnoresUnlockResult sessionKey mockEnv =
         newState == currentState
           && response == Agent.Success "already unlocked"
 
-propertyHandleRequestWithUnknownRequest :: AnyAgentState -> MockEnv -> Property
-propertyHandleRequestWithUnknownRequest (AnyAgentState initialState) mockEnv =
+propertyHandleRequestWithUnknownRequest :: Agent.AgentState -> MockEnv -> Property
+propertyHandleRequestWithUnknownRequest initialState mockEnv =
   let (newState, response) =
         runMockBitwarden mockEnv (Agent.handleRequestWith Agent.UnknownRequest initialState)
    in property $
@@ -238,7 +225,6 @@ propertyHandleUnlockSuccess sessionKey =
    in property $
         newState == Agent.Unlocked sessionKey
           && response == Agent.Success "unlocked"
-          && encodedResponse response == encodedResponse (Agent.Success "unlocked")
 
 expectedFailure :: Agent.UnlockError -> Agent.Response
 expectedFailure Agent.UnlockUnavailable = Agent.Failure "bw login failed"
