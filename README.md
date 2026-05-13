@@ -1,6 +1,6 @@
 # hwarden-agent
 
-Tiny Haskell daemon for one job: accept a local Unix socket JSON request to unlock Bitwarden via `bw login ... --raw`, then keep the resulting `BW_SESSION` only in process memory.
+Tiny Haskell daemon for one job: accept a local Unix socket JSON request, unlock Bitwarden via `bw login ... --raw`, and expose a small local API backed by the in-memory `BW_SESSION`.
 
 ## Run
 
@@ -47,6 +47,49 @@ Expected failure:
 {"ok":false,"error":"..."}
 ```
 
+Check the current lock status:
+
+```sh
+printf '{"cmd":"status"}' \
+  | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
+```
+
+Expected responses:
+
+```json
+{"ok":true,"message":"locked"}
+```
+
+or
+
+```json
+{"ok":true,"message":"unlocked"}
+```
+
+List login items after unlocking:
+
+```sh
+printf '{"cmd":"list-items"}' \
+  | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
+```
+
+Expected success:
+
+```json
+{
+  "ok": true,
+  "items": [
+    { "id": "1", "name": "Battle.net", "username": "joonas_laukka@hotmail.com" }
+  ]
+}
+```
+
+If the agent is still locked:
+
+```json
+{"ok":false,"error":"locked"}
+```
+
 Unknown command:
 
 ```sh
@@ -57,5 +100,5 @@ printf '{"cmd":"nope"}' \
 Expected response:
 
 ```json
-{"ok":false,"error":"unknown command"}
+{"ok":false,"error":"unknown request"}
 ```
