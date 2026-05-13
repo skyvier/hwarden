@@ -97,6 +97,22 @@ instance FromJSON Request where
       "status" -> pure Status
       _ -> pure UnknownRequest
 
+instance ToJSON Request where
+  toJSON (UnlockRequest (Username email) (Password password)) =
+    object
+      [ "cmd" .= ("unlock" :: Text),
+        "email" .= email,
+        "password" .= password
+      ]
+  toJSON Status =
+    object
+      [ "cmd" .= ("status" :: Text)
+      ]
+  toJSON UnknownRequest =
+    object
+      [ "cmd" .= ("unknown" :: Text)
+      ]
+
 instance ToJSON Response where
   toJSON (Success message) =
     object
