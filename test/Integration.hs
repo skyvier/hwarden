@@ -47,9 +47,14 @@ import System.Process
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
 
-data BwBehavior
-  = BwSucceeds BS8.ByteString
-  | BwFails BS8.ByteString
+data CommandBehavior
+  = CommandSucceeds BS8.ByteString
+  | CommandFails BS8.ByteString
+
+data BwBehavior = BwBehavior
+  { unlockBehavior :: CommandBehavior,
+    listItemsBehavior :: CommandBehavior
+  }
 
 data AgentResource = AgentResource
   { socketPath :: FilePath,
@@ -62,15 +67,23 @@ integrationTests =
   testGroup
     "integration"
     [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
-        agent <- setupAgent (BwFails "credentials were incorrect")
+        agent <- setupAgent defaultFailingBw
         response <- sendRequest (socketPath agent) Agent.Status
         cleanupAgent agent
         assertEqual
           "expected locked status response"
           (Agent.Success "locked")
           response
+    , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ do
+        agent <- setupAgent defaultFailingBw
+        response <- sendRequest (socketPath agent) Agent.ListItems
+        cleanupAgent agent
+        assertEqual
+          "expected locked list-items response"
+          (Agent.Failure "locked")
+          response
     , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $ do
-        agent <- setupAgent (BwSucceeds "session-key-123")
+        agent <- setupAgent (defaultFailingBw {unlockBehavior = CommandSucceeds "session-key-123"})
         initialStatus <- sendRequest (socketPath agent) Agent.Status
         unlockResponse <-
           sendRequest
@@ -81,8 +94,30 @@ integrationTests =
         assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
         assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
         assertEqual "expected unlocked status after successful unlock" (Agent.Success "unlocked") finalStatus
+    , testCase "sending unlock then list-items via the socket returns login item summaries" $ do
+        agent <-
+          setupAgent $
+            BwBehavior
+              { unlockBehavior = CommandSucceeds "session-key-123",
+                listItemsBehavior = CommandSucceeds listItemsPayload
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual
+          "expected listed login items"
+          ( Agent.ItemList
+              [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com",
+                Agent.ItemSummary "2" "GitHub" "skyvier"
+              ]
+          )
+          itemsResponse
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
-        agent <- setupAgent (BwFails "credentials were incorrect")
+        agent <- setupAgent defaultFailingBw
         initialStatus <- sendRequest (socketPath agent) Agent.Status
         unlockResponse <-
           sendRequest
@@ -93,8 +128,18 @@ integrationTests =
         assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
         assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
         assertEqual "expected locked status after failed unlock" (Agent.Success "locked") finalStatus
+    , testCase "sending failed unlock then list-items via the socket still reports locked" $ do
+        agent <- setupAgent defaultFailingBw
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+        itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+        cleanupAgent agent
+        assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
+        assertEqual "expected locked list-items response after failed unlock" (Agent.Failure "locked") itemsResponse
     , testCase "sending invalid credentials via the socket results in failure message" $ do
-        agent <- setupAgent (BwFails "credentials were incorrect")
+        agent <- setupAgent defaultFailingBw
         response <-
           sendRequest
             (socketPath agent)
@@ -185,19 +230,77 @@ writeFakeBw fakeBinDir bwBehavior = do
 
 scriptFor :: BwBehavior -> BS8.ByteString
 scriptFor bwBehavior =
-  case bwBehavior of
-    BwSucceeds sessionKey ->
+  BS8.unlines
+    [ "#!/bin/sh",
+      "case \"$1\" in",
+      "  login)",
+      emitBehavior "    " (unlockBehavior bwBehavior),
+      "    ;;",
+      "  list)",
+      "    if [ \"$2\" = \"items\" ]; then",
+      emitBehavior "      " (listItemsBehavior bwBehavior),
+      "    else",
+      "      printf '%s\\n' 'unsupported list command' 1>&2",
+      "      exit 1",
+      "    fi",
+      "    ;;",
+      "  *)",
+      "    printf '%s\\n' 'unsupported bw command' 1>&2",
+      "    exit 1",
+      "    ;;",
+      "esac"
+    ]
+
+emitBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
+emitBehavior indent commandBehavior =
+  case commandBehavior of
+    CommandSucceeds output ->
       BS8.unlines
-        [ "#!/bin/sh",
-          "printf '%s\\n' \"" <> sessionKey <> "\"",
-          "exit 0"
+        [ indent <> "while IFS= read -r line; do printf '%s\\n' \"$line\"; done <<'EOF'",
+          output,
+          "EOF",
+          indent <> "exit 0"
         ]
-    BwFails errMessage ->
+    CommandFails errMessage ->
       BS8.unlines
-        [ "#!/bin/sh",
-          "printf '%s\\n' \"" <> errMessage <> "\" 1>&2",
-          "exit 1"
+        [ indent <> "while IFS= read -r line; do printf '%s\\n' \"$line\" 1>&2; done <<'EOF'",
+          errMessage,
+          "EOF",
+          indent <> "exit 1"
         ]
+
+defaultFailingBw :: BwBehavior
+defaultFailingBw =
+  BwBehavior
+    { unlockBehavior = CommandFails "credentials were incorrect",
+      listItemsBehavior = CommandFails "bw list items failed"
+    }
+
+listItemsPayload :: BS8.ByteString
+listItemsPayload =
+  BS8.unlines
+    [ "[",
+      "  {",
+      "    \"id\": \"1\",",
+      "    \"name\": \"Battle.net\",",
+      "    \"login\": {",
+      "      \"username\": \"joonas_laukka@hotmail.com\"",
+      "    }",
+      "  },",
+      "  {",
+      "    \"id\": \"ignored\",",
+      "    \"name\": \"Secure note\",",
+      "    \"notes\": \"not a login\"",
+      "  },",
+      "  {",
+      "    \"id\": \"2\",",
+      "    \"name\": \"GitHub\",",
+      "    \"login\": {",
+      "      \"username\": \"skyvier\"",
+      "    }",
+      "  }",
+      "]"
+    ]
 
 requireExecutable :: String -> IO FilePath
 requireExecutable name = do

@@ -4,6 +4,8 @@ module Hwarden.Agent
   ( Bitwarden (..),
     AgentState (..),
     Decision (..),
+    ItemSummary (..),
+    ListItemsError (..),
     Password (..),
     Request (..),
     Response (..),
@@ -25,6 +27,7 @@ where
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally)
 import Control.Monad (forever, when)
+import Control.Applicative ((<|>))
 import Data.Aeson
   ( FromJSON (parseJSON),
     ToJSON (toJSON),
@@ -38,9 +41,9 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
-import Hwarden.Bitwarden (Bitwarden (unlock), UnlockError (..))
+import Hwarden.Bitwarden (Bitwarden (listItems, unlock), ListItemsError (..), UnlockError (..))
 import Hwarden.Socket (recvAll)
-import Hwarden.Types (Password (..), SessionKey (..), Username (..))
+import Hwarden.Types (ItemSummary (..), Password (..), SessionKey (..), Username (..))
 import Network.Socket
   ( Family (AF_UNIX),
     SockAddr (SockAddrUnix),
@@ -69,11 +72,13 @@ import Test.QuickCheck (Arbitrary (arbitrary))
 data Request
   = UnlockRequest Username Password
   | Status
+  | ListItems
   | UnknownRequest
   deriving (Eq, Show)
 
 data Response
   = Success Text
+  | ItemList [ItemSummary]
   | Failure Text
   deriving (Eq, Show)
 
@@ -95,6 +100,7 @@ instance FromJSON Request where
     case (cmd :: Text) of
       "unlock" -> UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
       "status" -> pure Status
+      "list-items" -> pure ListItems
       _ -> pure UnknownRequest
 
 instance ToJSON Request where
@@ -108,6 +114,10 @@ instance ToJSON Request where
     object
       [ "cmd" .= ("status" :: Text)
       ]
+  toJSON ListItems =
+    object
+      [ "cmd" .= ("list-items" :: Text)
+      ]
   toJSON UnknownRequest =
     object
       [ "cmd" .= ("unknown" :: Text)
@@ -119,6 +129,11 @@ instance ToJSON Response where
       [ "ok" .= True,
         "message" .= message
       ]
+  toJSON (ItemList items) =
+    object
+      [ "ok" .= True,
+        "items" .= items
+      ]
   toJSON (Failure err) =
     object
       [ "ok" .= False,
@@ -129,7 +144,7 @@ instance FromJSON Response where
   parseJSON = withObject "Response" $ \obj -> do
     ok <- obj .: "ok"
     if ok
-      then Success <$> obj .: "message"
+      then (ItemList <$> obj .: "items") <|> (Success <$> obj .: "message")
       else Failure <$> obj .: "error"
 
 runAgent :: IO ()
@@ -194,10 +209,13 @@ handleRequestWith request agentState =
   case decide request agentState of
     Unlock username password -> 
       handleUnlock username password
+    ListItemsAction sessionKey ->
+      handleListItems sessionKey agentState
     Reply response -> pure (agentState, response)
 
 data Decision 
   = Unlock Username Password
+  | ListItemsAction SessionKey
   | Reply Response
   deriving (Eq, Show)
 
@@ -210,6 +228,10 @@ decide Status agentState =
   case agentState of
     Locked -> Reply (Success "locked")
     Unlocked _ -> Reply (Success "unlocked")
+decide ListItems agentState =
+  case agentState of
+    Locked -> Reply (Failure "locked")
+    Unlocked sessionKey -> ListItemsAction sessionKey
 decide UnknownRequest _ = Reply (Failure "unknown request")
 
 handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
@@ -223,7 +245,28 @@ handleUnlock email password = do
     Right sessionKey ->
       pure (Unlocked sessionKey, Success "unlocked")
 
+handleListItems :: Bitwarden m => SessionKey -> AgentState -> m (AgentState, Response)
+handleListItems sessionKey agentState = do
+  result <- listItems sessionKey
+  pure $
+    case result of
+      Left ListItemsUnavailable ->
+        (agentState, Failure "bw list items failed")
+      Left (ListItemsFailed err) ->
+        (agentState, Failure (sanitizeListItemsFailure sessionKey err))
+      Right items ->
+        (agentState, ItemList items)
+
 sanitizeError :: Password -> Text -> Text
 sanitizeError (Password password) err =
-  let trimmed = T.strip (T.replace password "<redacted>" err)
+  let sanitized =
+        if T.null password then err else T.replace password "<redacted>" err
+      trimmed = T.strip sanitized
    in if T.null trimmed then "bw login failed" else trimmed
+
+sanitizeListItemsFailure :: SessionKey -> Text -> Text
+sanitizeListItemsFailure (SessionKey sessionKey) err =
+  let sanitized =
+        if T.null sessionKey then err else T.replace sessionKey "<redacted>" err
+      trimmed = T.strip sanitized
+   in if T.null trimmed then "bw list items failed" else trimmed
