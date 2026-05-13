@@ -11,7 +11,7 @@ where
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), object, withObject, (.:), (.=))
 import Data.Text (Text)
 import qualified Data.Text as T
-import Test.QuickCheck (Arbitrary (arbitrary), elements, listOf1)
+import Test.QuickCheck (Arbitrary (arbitrary))
 
 data ItemSummary = ItemSummary
   { itemId :: Text,
@@ -21,11 +21,11 @@ data ItemSummary = ItemSummary
   deriving (Eq, Show)
 
 instance ToJSON ItemSummary where
-  toJSON (ItemSummary itemId itemName itemUsername) =
+  toJSON (ItemSummary summaryId summaryName summaryUsername) =
     object
-      [ "id" .= itemId,
-        "name" .= itemName,
-        "username" .= itemUsername
+      [ "id" .= summaryId,
+        "name" .= summaryName,
+        "username" .= summaryUsername
       ]
 
 instance FromJSON ItemSummary where
@@ -42,11 +42,7 @@ instance Show SessionKey where
   show _ = "[REDACTED]"
 
 instance Arbitrary SessionKey where
-  arbitrary =
-    SessionKey . ("session-key-" <>) . T.pack <$> listOf1 (elements sessionChars)
-
-sessionChars :: [Char]
-sessionChars = ['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9']
+  arbitrary = SessionKey . T.pack <$> arbitrary
 
 newtype Username = Username Text
   deriving (Eq, Show)

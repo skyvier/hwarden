@@ -110,11 +110,7 @@ integrationTests =
         assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
         assertEqual
           "expected listed login items"
-          ( Agent.ItemList
-              [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com",
-                Agent.ItemSummary "2" "GitHub" "skyvier"
-              ]
-          )
+          (Agent.ItemList listItemsSummary)
           itemsResponse
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
         agent <- setupAgent defaultFailingBw
@@ -301,6 +297,14 @@ listItemsPayload =
       "  }",
       "]"
     ]
+
+-- Keep this summary next to listItemsPayload: the integration assertion is
+-- intentionally derived from the same mocked CLI payload.
+listItemsSummary :: [Agent.ItemSummary]
+listItemsSummary =
+  [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com",
+    Agent.ItemSummary "2" "GitHub" "skyvier"
+  ]
 
 requireExecutable :: String -> IO FilePath
 requireExecutable name = do
