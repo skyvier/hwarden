@@ -47,6 +47,10 @@ import System.Process
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
 
+data BwBehavior
+  = BwSucceeds BS8.ByteString
+  | BwFails BS8.ByteString
+
 data AgentResource = AgentResource
   { socketPath :: FilePath,
     processHandle :: ProcessHandle,
@@ -58,16 +62,43 @@ integrationTests =
   testGroup
     "integration"
     [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
-        agent <- setupAgent
-        response <- sendRequest (socketPath agent) "{\"cmd\":\"status\"}"
+        agent <- setupAgent (BwFails "credentials were incorrect")
+        response <- sendRequest (socketPath agent) Agent.Status
         cleanupAgent agent
         assertEqual
           "expected locked status response"
           (Agent.Success "locked")
           response
+    , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $ do
+        agent <- setupAgent (BwSucceeds "session-key-123")
+        initialStatus <- sendRequest (socketPath agent) Agent.Status
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        finalStatus <- sendRequest (socketPath agent) Agent.Status
+        cleanupAgent agent
+        assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual "expected unlocked status after successful unlock" (Agent.Success "unlocked") finalStatus
+    , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
+        agent <- setupAgent (BwFails "credentials were incorrect")
+        initialStatus <- sendRequest (socketPath agent) Agent.Status
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+        finalStatus <- sendRequest (socketPath agent) Agent.Status
+        cleanupAgent agent
+        assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
+        assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
+        assertEqual "expected locked status after failed unlock" (Agent.Success "locked") finalStatus
     , testCase "sending invalid credentials via the socket results in failure message" $ do
-        agent <- setupAgent
-        response <- sendRequest (socketPath agent) "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
+        agent <- setupAgent (BwFails "credentials were incorrect")
+        response <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
         cleanupAgent agent
         assertBool "expected failure response" (response /= Agent.Success "unlocked")
         assertEqual
@@ -76,15 +107,15 @@ integrationTests =
           response
     ]
 
-setupAgent :: IO AgentResource
-setupAgent = do
+setupAgent :: BwBehavior -> IO AgentResource
+setupAgent bwBehavior = do
   tmpDir <- createTempDir "hwarden-agent-test"
   let runtimeDir = tmpDir </> "runtime"
       fakeBinDir = tmpDir </> "bin"
       agentSocketPath = runtimeDir </> "hwarden" </> "agent.sock"
   createDirectoryIfMissing True runtimeDir
   createDirectoryIfMissing True fakeBinDir
-  writeFakeBw fakeBinDir
+  writeFakeBw fakeBinDir bwBehavior
   hwardenAgent <- requireExecutable "hwarden-agent"
   bwReal <- requireExecutable "bw"
   baseEnv <- getEnvironment
@@ -128,10 +159,10 @@ waitForSocket agentSocketPath = go (200 :: Int)
         then pure ()
         else threadDelay 50000 >> go (retries - 1)
 
-sendRequest :: FilePath -> String -> IO Agent.Response
-sendRequest agentSocketPath requestBody =
+sendRequest :: FilePath -> Agent.Request -> IO Agent.Response
+sendRequest agentSocketPath request =
   bracket open close $ \conn -> do
-    NBS.sendAll conn (BS8.pack requestBody)
+    NBS.sendAll conn (LBS.toStrict (Aeson.encode request))
     shutdown conn ShutdownSend
     responseBytes <- recvAll conn
     case Aeson.eitherDecode (LBS.fromStrict responseBytes) of
@@ -143,19 +174,30 @@ sendRequest agentSocketPath requestBody =
       connect conn (SockAddrUnix agentSocketPath)
       pure conn
 
-writeFakeBw :: FilePath -> IO ()
-writeFakeBw fakeBinDir = do
+writeFakeBw :: FilePath -> BwBehavior -> IO ()
+writeFakeBw fakeBinDir bwBehavior = do
   let fakeBw = fakeBinDir </> "bw"
   BS8.writeFile
     fakeBw
-    ( BS8.unlines
-        [ "#!/bin/sh",
-          "echo 'credentials were incorrect' 1>&2",
-          "exit 1"
-        ]
-    )
+    (scriptFor bwBehavior)
   permissions <- getPermissions fakeBw
   setPermissions fakeBw permissions {executable = True}
+
+scriptFor :: BwBehavior -> BS8.ByteString
+scriptFor bwBehavior =
+  case bwBehavior of
+    BwSucceeds sessionKey ->
+      BS8.unlines
+        [ "#!/bin/sh",
+          "printf '%s\\n' \"" <> sessionKey <> "\"",
+          "exit 0"
+        ]
+    BwFails errMessage ->
+      BS8.unlines
+        [ "#!/bin/sh",
+          "printf '%s\\n' \"" <> errMessage <> "\" 1>&2",
+          "exit 1"
+        ]
 
 requireExecutable :: String -> IO FilePath
 requireExecutable name = do
