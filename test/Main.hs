@@ -7,7 +7,8 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Bits ((.&.))
-import qualified Data.Text as Text
+import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Integration (integrationTests)
 import qualified Hwarden.Agent as Agent
@@ -26,7 +27,7 @@ import System.Posix.Files
     getFileStatus,
     setFileMode
   )
-import Test.QuickCheck (Arbitrary (arbitrary), Property, property)
+import Test.QuickCheck (Arbitrary (arbitrary), Property, property, (==>))
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 import Test.Tasty.QuickCheck (testProperty)
@@ -185,22 +186,24 @@ pureStateTransitionTests =
         [ testProperty "given a locked state, successful unlock action transitions state to unlocked" $
             propertyHandleRequestWithUnlockSuccess
         , testCase "given a locked state, a status request returns locked" $
-            let (newState, response) =
+            let currentState = Agent.Locked
+                (newState, response) =
                   runMockBitwarden
                     (MockEnv (Left Agent.UnlockUnavailable) (Right []))
-                    (Agent.handleRequestWith Agent.Status Agent.Locked)
+                    (Agent.handleRequestWith Agent.Status currentState)
              in do
-                  newState @?= Agent.Locked
+                  newState @?= currentState
                   response @?= Agent.Success "locked"
         , testProperty "given an unlocked state, a status request returns unlocked" $
             propertyHandleRequestWithStatusUnlocked
         , testCase "given a locked state, a list-items request returns locked failure" $
-            let (newState, response) =
+            let currentState = Agent.Locked
+                (newState, response) =
                   runMockBitwarden
                     (MockEnv (Left Agent.UnlockUnavailable) (Right []))
-                    (Agent.handleRequestWith Agent.ListItems Agent.Locked)
+                    (Agent.handleRequestWith Agent.ListItems currentState)
              in do
-                  newState @?= Agent.Locked
+                  newState @?= currentState
                   response @?= Agent.Failure "locked"
         , testCase "given an unlocked state, a list-items request returns items and preserves state" $
             let items =
@@ -291,23 +294,26 @@ propertyHandleRequestWithStatusDoesNotExposeSessionKey initialState =
         runMockBitwarden
           (MockEnv (Left Agent.UnlockUnavailable) (Right []))
           (Agent.handleRequestWith Agent.Status initialState)
-   in property $
-        newState == initialState
-          && statusResponseMatchesState initialState response
-          && not (statusResponseLeaksSessionKey initialState response)
+   in stateUsesNonEmptySessionKey initialState ==>
+        property
+          ( newState == initialState
+              && statusResponseMatchesState initialState response
+              && not (statusResponseLeaksSessionKey initialState response)
+          )
 
 propertyHandleRequestWithListItemsDoesNotExposeSessionKey :: Agent.SessionKey -> [Agent.ItemSummary] -> Property
 propertyHandleRequestWithListItemsDoesNotExposeSessionKey sessionKey items =
-  let sanitizedItems = map (removeSessionKeyFromItem sessionText) items
-      currentState = Agent.Unlocked sessionKey
+  let currentState = Agent.Unlocked sessionKey
       (newState, response) =
         runMockBitwarden
-          (MockEnv (Left Agent.UnlockUnavailable) (Right sanitizedItems))
+          (MockEnv (Left Agent.UnlockUnavailable) (Right items))
           (Agent.handleRequestWith Agent.ListItems currentState)
-   in property $
-        newState == currentState
-          && response == Agent.ItemList sanitizedItems
-          && not (TE.encodeUtf8 sessionText `BS.isInfixOf` encodedResponse response)
+   in doesNotContainSessionKey sessionText items ==>
+        property
+          ( newState == currentState
+              && response == Agent.ItemList items
+              && not (TE.encodeUtf8 sessionText `BS.isInfixOf` encodedResponse response)
+          )
   where
     Agent.SessionKey sessionText = sessionKey
 
@@ -334,7 +340,7 @@ propertyHandleUnlockSuccess sessionKey =
 
 expectedFailure :: Agent.UnlockError -> Agent.Response
 expectedFailure Agent.UnlockUnavailable = Agent.Failure "bw login failed"
-expectedFailure (Agent.UnlockFailed err) = Agent.Failure (Agent.sanitizeError (Agent.Password "secret") err)
+expectedFailure (Agent.UnlockFailed err) = Agent.Failure (Agent.sanitizeUnlockError (Agent.Password "secret") err)
 
 statusResponseMatchesState :: Agent.AgentState -> Agent.Response -> Bool
 statusResponseMatchesState Agent.Locked response = response == Agent.Success "locked"
@@ -355,16 +361,17 @@ encodedResponseContains needle response =
 encodedResponse :: Agent.Response -> BS.ByteString
 encodedResponse = LBS.toStrict . Aeson.encode
 
-removeSessionKeyFromItem :: Text.Text -> Agent.ItemSummary -> Agent.ItemSummary
-removeSessionKeyFromItem sessionText (Agent.ItemSummary itemId itemName itemUsername) =
-  Agent.ItemSummary
-    (sanitizeField itemId)
-    (sanitizeField itemName)
-    (sanitizeField itemUsername)
+doesNotContainSessionKey :: Text -> [Agent.ItemSummary] -> Bool
+doesNotContainSessionKey sessionText items =
+  not (T.null sessionText) && all itemDoesNotContainSessionKey items
   where
-    sanitizeField field
-      | Text.null sessionText = field
-      | otherwise = Text.replace sessionText "<session-key>" field
+    encodedSessionKey = TE.encodeUtf8 sessionText
+    itemDoesNotContainSessionKey item =
+      not (encodedSessionKey `BS.isInfixOf` LBS.toStrict (Aeson.encode item))
+
+stateUsesNonEmptySessionKey :: Agent.AgentState -> Bool
+stateUsesNonEmptySessionKey Agent.Locked = True
+stateUsesNonEmptySessionKey (Agent.Unlocked (Agent.SessionKey sessionText)) = not (T.null sessionText)
 
 assertGoldenEncoding :: FilePath -> Agent.Response -> IO ()
 assertGoldenEncoding goldenPath response = do

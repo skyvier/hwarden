@@ -20,7 +20,7 @@ module Hwarden.Agent
     prepareSocketDir,
     removeExistingSocket,
     runAgent,
-    sanitizeError
+    sanitizeUnlockError
   )
 where
 
@@ -241,24 +241,25 @@ handleUnlock email password = do
     Left UnlockUnavailable ->
       pure (Locked, Failure "bw login failed")
     Left (UnlockFailed err) ->
-      pure (Locked, Failure (sanitizeError password err))
+      pure (Locked, Failure (sanitizeUnlockError password err))
     Right sessionKey ->
       pure (Unlocked sessionKey, Success "unlocked")
 
 handleListItems :: Bitwarden m => SessionKey -> AgentState -> m (AgentState, Response)
 handleListItems sessionKey agentState = do
   result <- listItems sessionKey
-  pure $
-    case result of
-      Left ListItemsUnavailable ->
-        (agentState, Failure "bw list items failed")
-      Left (ListItemsFailed err) ->
-        (agentState, Failure (sanitizeListItemsFailure sessionKey err))
-      Right items ->
-        (agentState, ItemList items)
+  let response =
+        case result of
+          Left ListItemsUnavailable ->
+            Failure "bw list items failed"
+          Left (ListItemsFailed err) ->
+            Failure (sanitizeListItemsFailure sessionKey err)
+          Right items ->
+            ItemList items
+  pure (agentState, response)
 
-sanitizeError :: Password -> Text -> Text
-sanitizeError (Password password) err =
+sanitizeUnlockError :: Password -> Text -> Text
+sanitizeUnlockError (Password password) err =
   let sanitized =
         if T.null password then err else T.replace password "<redacted>" err
       trimmed = T.strip sanitized
