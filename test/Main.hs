@@ -87,6 +87,18 @@ parsingTests =
                 "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
         Aeson.eitherDecodeStrict' payload
           @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+    , testCase "bitwarden item parser decodes a login item into an item summary" $ do
+        let payload =
+              BS8.pack
+                "[{\"id\":\"1\",\"name\":\"Battle.net\",\"login\":{\"username\":\"skyvier\"}}]"
+        Bitwarden.decodeItemSummaries payload
+          @?= Right [Agent.ItemSummary "1" "Battle.net" "skyvier"]
+    , testCase "bitwarden item parser ignores non-login items" $ do
+        let payload =
+              BS8.pack
+                "[{\"id\":\"1\",\"name\":\"Secure note\"}]"
+        Bitwarden.decodeItemSummaries payload
+          @?= Right []
     , testCase "request parser decodes status payload" $ do
         let payload = BS8.pack "{\"cmd\":\"status\"}"
         Aeson.eitherDecodeStrict' payload
@@ -105,6 +117,14 @@ encodingTests =
         assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
     , testCase "failure response encoding matches golden file" $
         assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
+    , testCase "item-list response encoding matches golden file" $
+        assertGoldenEncoding
+          "test/golden/item-list.json"
+          ( Agent.ItemList
+              [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com",
+                Agent.ItemSummary "2" "GitHub" "skyvier"
+              ]
+          )
     ]
 
 filesystemTests :: TestTree
@@ -228,6 +248,11 @@ pureStateTransitionTests =
             propertyHandleRequestWithListItemsDoesNotExposeSessionKey
         ]
     , testGroup
+        "handleListItems"
+        [ testProperty "given any initial state, handleListItems never changes the agent state" $
+            propertyHandleListItemsPreservesState
+        ]
+    , testGroup
         "handleUnlock"
         [ testProperty "given a locked state, a failed unlock action leaves the state unchanged" $
             propertyHandleUnlockFailure
@@ -328,6 +353,18 @@ propertyHandleUnlockFailure unlockError =
           && response == expectedFailure unlockError
           && not (encodedResponseContains "secret" response)
 
+propertyHandleListItemsPreservesState ::
+  Agent.SessionKey ->
+  Agent.AgentState ->
+  Either Agent.ListItemsError [Agent.ItemSummary] ->
+  Property
+propertyHandleListItemsPreservesState sessionKey initialState mockListItemsResult =
+  let (newState, _) =
+        runMockBitwarden
+          (MockEnv (Left Agent.UnlockUnavailable) mockListItemsResult)
+          (Agent.handleListItems sessionKey initialState)
+   in property (newState == initialState)
+
 propertyHandleUnlockSuccess :: Agent.SessionKey -> Property
 propertyHandleUnlockSuccess sessionKey =
   let (newState, response) =
@@ -371,7 +408,9 @@ doesNotContainSessionKey sessionText items =
 
 stateUsesNonEmptySessionKey :: Agent.AgentState -> Bool
 stateUsesNonEmptySessionKey Agent.Locked = True
-stateUsesNonEmptySessionKey (Agent.Unlocked (Agent.SessionKey sessionText)) = not (T.null sessionText)
+stateUsesNonEmptySessionKey (Agent.Unlocked (Agent.SessionKey sessionText)) =
+  not (T.null sessionText)
+    && not (TE.encodeUtf8 sessionText `BS.isInfixOf` encodedResponse (Agent.Success "unlocked"))
 
 assertGoldenEncoding :: FilePath -> Agent.Response -> IO ()
 assertGoldenEncoding goldenPath response = do

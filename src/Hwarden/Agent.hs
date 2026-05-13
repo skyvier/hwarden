@@ -14,6 +14,7 @@ module Hwarden.Agent
     Username (..),
     cleanupSocket,
     decide,
+    handleListItems,
     handleUnlock,
     handleRequest,
     handleRequestWith,
