@@ -11,6 +11,7 @@ where
 import Control.Exception (SomeException, try)
 import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict', withObject, (.:), (.:?))
 import qualified Data.ByteString.Char8 as BS8
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Types
@@ -94,11 +95,19 @@ instance Bitwarden IO where
 
 decodeItemSummaries :: BS8.ByteString -> Either Text [ItemSummary]
 decodeItemSummaries raw =
+  case decodeBwItems raw of
+    Left decodeErr ->
+      Left decodeErr
+    Right bwItems ->
+      Right (extractLoginItems bwItems)
+
+decodeBwItems :: BS8.ByteString -> Either Text [BwItem]
+decodeBwItems raw =
   case eitherDecodeStrict' raw of
     Left decodeErr ->
       Left (T.pack decodeErr)
-    Right rawItems ->
-      Right (extractLoginItems rawItems)
+    Right bwItems ->
+      Right bwItems
 
 data BwItem = BwItem
   { bwItemId :: Text,
@@ -119,16 +128,19 @@ instance FromJSON BwLogin where
     BwLogin <$> obj .:? "username"
 
 extractLoginItems :: [BwItem] -> [ItemSummary]
-extractLoginItems = foldr collect []
-  where
-    collect item acc =
-      case bwItemLogin item of
-        Nothing -> acc
-        Just login ->
-          ItemSummary
+extractLoginItems = mapMaybe toItemSummary
+
+toItemSummary :: BwItem -> Maybe ItemSummary
+toItemSummary item =
+  case bwItemLogin item of
+    Nothing -> Nothing
+    Just login ->
+      Just
+        ( ItemSummary
             (bwItemId item)
             (bwItemName item)
-            (maybe "" id (bwLoginUsername login)) : acc
+            (maybe "" id (bwLoginUsername login))
+        )
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
