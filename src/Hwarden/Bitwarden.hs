@@ -2,17 +2,19 @@
 
 module Hwarden.Bitwarden
   ( Bitwarden (..),
-    decodeItemSummaries,
     ListItemsError (..),
-    UnlockError (..)
+    UnlockError (..),
+    BwItem (..), 
+    BwLogin (..)
   )
 where
 
 import Control.Exception (SomeException, try)
-import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict', withObject, (.:), (.:?))
+import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict, withObject, (.:), (.:?))
 import qualified Data.ByteString.Char8 as BS8
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
+import Data.Bifunctor (first)
 import qualified Data.Text as T
 import Hwarden.Types
   ( ItemSummary (ItemSummary),
@@ -84,48 +86,33 @@ instance Bitwarden IO where
           Left ListItemsUnavailable
         Right (exitCode, stdoutText, stderrText) ->
           case exitCode of
-            ExitSuccess ->
-              case decodeItemSummaries (BS8.pack stdoutText) of
-                Left decodeErr ->
-                  Left (ListItemsFailed decodeErr)
-                Right items ->
-                  Right items
+            ExitSuccess -> do
+              bwItems <- 
+                first (ListItemsFailed . T.pack) $ 
+                  eitherDecodeStrict (BS8.pack stdoutText)
+              return $ extractLoginItems bwItems
             ExitFailure _ ->
               Left (ListItemsFailed (T.pack stderrText))
-
-decodeItemSummaries :: BS8.ByteString -> Either Text [ItemSummary]
-decodeItemSummaries raw =
-  case decodeBwItems raw of
-    Left decodeErr ->
-      Left decodeErr
-    Right bwItems ->
-      Right (extractLoginItems bwItems)
-
-decodeBwItems :: BS8.ByteString -> Either Text [BwItem]
-decodeBwItems raw =
-  case eitherDecodeStrict' raw of
-    Left decodeErr ->
-      Left (T.pack decodeErr)
-    Right bwItems ->
-      Right bwItems
 
 data BwItem = BwItem
   { bwItemId :: Text,
     bwItemName :: Text,
     bwItemLogin :: Maybe BwLogin
   }
+  deriving (Eq, Show)
 
 instance FromJSON BwItem where
   parseJSON = withObject "BwItem" $ \obj ->
     BwItem <$> obj .: "id" <*> obj .: "name" <*> obj .:? "login"
 
 data BwLogin = BwLogin
-  { bwLoginUsername :: Maybe Text
+  { bwLoginUsername :: Text
   }
+  deriving (Eq, Show)
 
 instance FromJSON BwLogin where
   parseJSON = withObject "BwLogin" $ \obj ->
-    BwLogin <$> obj .:? "username"
+    BwLogin <$> obj .: "username"
 
 extractLoginItems :: [BwItem] -> [ItemSummary]
 extractLoginItems = mapMaybe toItemSummary
@@ -139,7 +126,7 @@ toItemSummary item =
         ( ItemSummary
             (bwItemId item)
             (bwItemName item)
-            (maybe "" id (bwLoginUsername login))
+            (bwLoginUsername login)
         )
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]

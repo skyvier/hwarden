@@ -87,18 +87,28 @@ parsingTests =
                 "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
         Aeson.eitherDecodeStrict' payload
           @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
-    , testCase "bitwarden item parser decodes a login item into an item summary" $ do
+    , testCase "bitwarden item parser decodes a login item" $ do
         let payload =
               BS8.pack
                 "[{\"id\":\"1\",\"name\":\"Battle.net\",\"login\":{\"username\":\"skyvier\"}}]"
-        Bitwarden.decodeItemSummaries payload
-          @?= Right [Agent.ItemSummary "1" "Battle.net" "skyvier"]
-    , testCase "bitwarden item parser ignores non-login items" $ do
+        Aeson.eitherDecodeStrict payload
+          @?= Right [
+            Bitwarden.BwItem 
+              "1" 
+              "Battle.net" 
+              (Just $ Bitwarden.BwLogin "skyvier")
+            ]
+    , testCase "bitwarden item parser decodes non-login items too" $ do
         let payload =
               BS8.pack
                 "[{\"id\":\"1\",\"name\":\"Secure note\"}]"
-        Bitwarden.decodeItemSummaries payload
-          @?= Right []
+        Aeson.eitherDecodeStrict payload
+          @?= Right [
+            Bitwarden.BwItem 
+              "1" 
+              "Secure note" 
+              Nothing
+            ]
     , testCase "request parser decodes status payload" $ do
         let payload = BS8.pack "{\"cmd\":\"status\"}"
         Aeson.eitherDecodeStrict' payload
