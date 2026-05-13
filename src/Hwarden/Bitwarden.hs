@@ -2,6 +2,7 @@
 
 module Hwarden.Bitwarden
   ( Bitwarden (..),
+    decodeItemSummaries,
     ListItemsError (..),
     UnlockError (..)
   )
@@ -83,13 +84,21 @@ instance Bitwarden IO where
         Right (exitCode, stdoutText, stderrText) ->
           case exitCode of
             ExitSuccess ->
-              case eitherDecodeStrict' (BS8.pack stdoutText) of
+              case decodeItemSummaries (BS8.pack stdoutText) of
                 Left decodeErr ->
-                  Left (ListItemsFailed (T.pack decodeErr))
-                Right rawItems ->
-                  Right (extractLoginItems rawItems)
+                  Left (ListItemsFailed decodeErr)
+                Right items ->
+                  Right items
             ExitFailure _ ->
               Left (ListItemsFailed (T.pack stderrText))
+
+decodeItemSummaries :: BS8.ByteString -> Either Text [ItemSummary]
+decodeItemSummaries raw =
+  case eitherDecodeStrict' raw of
+    Left decodeErr ->
+      Left (T.pack decodeErr)
+    Right rawItems ->
+      Right (extractLoginItems rawItems)
 
 data BwItem = BwItem
   { bwItemId :: Text,
