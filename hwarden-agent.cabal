@@ -8,6 +8,7 @@ library
   exposed-modules:
       Hwarden.Agent
     , Hwarden.Bitwarden
+    , Hwarden.Logging
     , Hwarden.Socket
     , Hwarden.Types
   default-language:    Haskell2010
@@ -17,11 +18,14 @@ library
     , bytestring
     , directory
     , filepath
+    , katip
     , network
     , process
     , QuickCheck
+    , random
     , text
     , unix
+    , uuid
   ghc-options:         -Wall
 
 executable hwarden-agent
@@ -48,12 +52,15 @@ test-suite hwarden-agent-test
     , directory
     , hwarden-agent
     , filepath
+    , katip
     , network
     , process
     , QuickCheck
+    , random
     , tasty
     , tasty-hunit
     , tasty-quickcheck
     , text
     , unix
+    , uuid
   ghc-options:         -Wall
