@@ -27,8 +27,9 @@ where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally)
-import Control.Monad (forever, when)
 import Control.Applicative ((<|>))
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad (forever, when)
 import Data.Aeson
   ( FromJSON (parseJSON),
     ToJSON (toJSON),
@@ -43,8 +44,27 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Bitwarden (Bitwarden (listItems, unlock), ListItemsError (..), UnlockError (..))
+import Hwarden.Logging (logInfo)
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), Password (..), SessionKey (..), Username (..))
+import Katip
+  ( ColorStrategy (ColorIfTerminal),
+    KatipContext,
+    LogEnv,
+    LogContexts,
+    Namespace,
+    Severity (InfoS),
+    Verbosity (V2),
+    closeScribes,
+    defaultScribeSettings,
+    initLogEnv,
+    katipAddContext,
+    mkHandleScribe,
+    permitItem,
+    registerScribe,
+    runKatipContextT,
+    sl
+  )
 import Network.Socket
   ( Family (AF_UNIX),
     SockAddr (SockAddrUnix),
@@ -67,8 +87,11 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.FilePath ((</>))
+import System.IO (stderr)
 import System.Posix.Files (ownerModes, setFileMode)
 import Test.QuickCheck (Arbitrary (arbitrary))
+import qualified Data.UUID as UUID
+import Data.UUID.V4 (nextRandom)
 
 data Request
   = UnlockRequest Username Password
@@ -150,6 +173,7 @@ instance FromJSON Response where
 
 runAgent :: IO ()
 runAgent = do
+  logEnv <- initAgentLogEnv
   runtimeDir <- requireRuntimeDir
   let socketDir = runtimeDir </> "hwarden"
       socketPath = socketDir </> "agent.sock"
@@ -165,8 +189,8 @@ runAgent = do
         listen sock maxListenQueue
         forever $ do
           (conn, _) <- accept sock
-          handleConnection agentStateVar conn)
-    (close sock `finally` cleanupSocket socketPath)
+          handleConnection logEnv agentStateVar conn)
+    (close sock `finally` (cleanupSocket socketPath `finally` closeScribes logEnv))
 
 requireRuntimeDir :: IO FilePath
 requireRuntimeDir = do
@@ -188,16 +212,23 @@ removeExistingSocket socketPath = do
 cleanupSocket :: FilePath -> IO ()
 cleanupSocket socketPath = removeExistingSocket socketPath
 
-handleConnection :: MVar AgentState -> Socket -> IO ()
-handleConnection agentStateVar conn =
+handleConnection :: LogEnv -> MVar AgentState -> Socket -> IO ()
+handleConnection logEnv agentStateVar conn =
   finally
-    (do
-        raw <- recvAll conn
-        response <-
-          case eitherDecodeStrict' raw of
-            Left err -> pure (Failure (T.pack err))
-            Right request -> handleRequest agentStateVar request
-        NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
+    (runKatipContextT logEnv (mempty :: LogContexts) socketNamespace $ do
+        traceId <- liftIO generateTraceId
+        katipAddContext (sl "trace_id" traceId) $ do
+          raw <- liftIO (recvAll conn)
+          response <-
+            case eitherDecodeStrict' raw of
+              Left err -> do
+                logRequestDecodeFailure err
+                pure (Failure (T.pack err))
+              Right request -> do
+                logRequestReceived request
+                liftIO (handleRequest agentStateVar request)
+          liftIO (NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
+          logResponseSent response)
     (close conn)
 
 handleRequest :: MVar AgentState -> Request -> IO Response
@@ -272,3 +303,33 @@ sanitizeListItemsFailure (SessionKey sessionKey) err =
         if T.null sessionKey then err else T.replace sessionKey "<redacted>" err
       trimmed = T.strip sanitized
    in if T.null trimmed then "bw list items failed" else trimmed
+
+generateTraceId :: IO Text
+generateTraceId = UUID.toText <$> nextRandom
+
+logRequestDecodeFailure :: KatipContext m => String -> m ()
+logRequestDecodeFailure decodeErr =
+  katipAddContext
+    (sl "request" ("invalid-json" :: String) <> sl "decode_error" decodeErr)
+    (logInfo "received request")
+
+logRequestReceived :: KatipContext m => Request -> m ()
+logRequestReceived request =
+  katipAddContext
+    (sl "request" (show request))
+    (logInfo "received request")
+
+logResponseSent :: KatipContext m => Response -> m ()
+logResponseSent response =
+  katipAddContext
+    (sl "response" (show response))
+    (logInfo "sent response")
+
+initAgentLogEnv :: IO LogEnv
+initAgentLogEnv = do
+  handleScribe <- mkHandleScribe ColorIfTerminal stderr (permitItem InfoS) V2
+  baseLogEnv <- initLogEnv "hwarden-agent" "production"
+  registerScribe "stderr" handleScribe defaultScribeSettings baseLogEnv
+
+socketNamespace :: Namespace
+socketNamespace = "socket"

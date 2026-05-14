@@ -410,7 +410,9 @@ encodedResponse = LBS.toStrict . Aeson.encode
 
 doesNotContainSessionKey :: Text -> [Agent.ItemSummary] -> Bool
 doesNotContainSessionKey sessionText items =
-  not (T.null sessionText) && all itemDoesNotContainSessionKey items
+  not (T.null sessionText)
+    && not (TE.encodeUtf8 sessionText `BS.isInfixOf` encodedResponse (Agent.ItemList []))
+    && all itemDoesNotContainSessionKey items
   where
     encodedSessionKey = TE.encodeUtf8 sessionText
     itemDoesNotContainSessionKey item =
