@@ -11,6 +11,9 @@ library
     , Hwarden.Logging
     , Hwarden.Socket
     , Hwarden.Types
+  other-modules:
+      Hwarden.App
+    , Hwarden.Bitwarden.Real
   default-language:    Haskell2010
   build-depends:
       aeson
