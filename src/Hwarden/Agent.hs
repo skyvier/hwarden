@@ -25,7 +25,7 @@ module Hwarden.Agent
   )
 where
 
-import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import UnliftIO.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (finally)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
@@ -47,22 +47,13 @@ import Hwarden.Bitwarden (Bitwarden (listItems, unlock), ListItemsError (..), Un
 import Hwarden.Logging (logInfo)
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), Password (..), SessionKey (..), Username (..))
+import Hwarden.App (AgentT, runAgentT, Env(..), initAgentEnv)
 import Katip
-  ( ColorStrategy (ColorIfTerminal),
-    KatipContext,
-    LogEnv,
-    LogContexts,
+  ( KatipContext,
     Namespace,
-    Severity (InfoS),
-    Verbosity (V2),
     closeScribes,
-    defaultScribeSettings,
-    initLogEnv,
     katipAddContext,
-    mkHandleScribe,
-    permitItem,
-    registerScribe,
-    runKatipContextT,
+    katipAddNamespace,
     sl
   )
 import Network.Socket
@@ -87,7 +78,6 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.FilePath ((</>))
-import System.IO (stdout)
 import System.Posix.Files (ownerModes, setFileMode)
 import Test.QuickCheck (Arbitrary (arbitrary))
 import qualified Data.UUID as UUID
@@ -173,7 +163,7 @@ instance FromJSON Response where
 
 runAgent :: IO ()
 runAgent = do
-  logEnv <- initAgentLogEnv
+  env <- initAgentEnv
   runtimeDir <- requireRuntimeDir
   let socketDir = runtimeDir </> "hwarden"
       socketPath = socketDir </> "agent.sock"
@@ -189,8 +179,8 @@ runAgent = do
         listen sock maxListenQueue
         forever $ do
           (conn, _) <- accept sock
-          handleConnection logEnv agentStateVar conn)
-    (close sock `finally` (cleanupSocket socketPath `finally` closeScribes logEnv))
+          handleConnection env agentStateVar conn)
+    (close sock `finally` (cleanupSocket socketPath `finally` closeScribes (envLogEnv env)))
 
 requireRuntimeDir :: IO FilePath
 requireRuntimeDir = do
@@ -212,10 +202,11 @@ removeExistingSocket socketPath = do
 cleanupSocket :: FilePath -> IO ()
 cleanupSocket socketPath = removeExistingSocket socketPath
 
-handleConnection :: LogEnv -> MVar AgentState -> Socket -> IO ()
-handleConnection logEnv agentStateVar conn =
+handleConnection :: Env -> MVar AgentState -> Socket -> IO ()
+handleConnection agentEnv agentStateVar conn =
   finally
-    (runKatipContextT logEnv (mempty :: LogContexts) socketNamespace $ do
+    (runAgentT agentEnv $
+        katipAddNamespace socketNamespace $ do
         traceId <- liftIO generateTraceId
         katipAddContext (sl "trace_id" traceId) $ do
           raw <- liftIO (recvAll conn)
@@ -226,12 +217,12 @@ handleConnection logEnv agentStateVar conn =
                 pure (Failure (T.pack err))
               Right request -> do
                 logRequestReceived request
-                liftIO (handleRequest agentStateVar request)
+                handleRequest agentStateVar request
           liftIO (NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
           logResponseSent response)
     (close conn)
 
-handleRequest :: MVar AgentState -> Request -> IO Response
+handleRequest :: MVar AgentState -> Request -> AgentT Response
 handleRequest agentStateVar request =
   modifyMVar agentStateVar $ handleRequestWith request
 
@@ -324,12 +315,6 @@ logResponseSent response =
   katipAddContext
     (sl "response" (show response))
     (logInfo "sent response")
-
-initAgentLogEnv :: IO LogEnv
-initAgentLogEnv = do
-  handleScribe <- mkHandleScribe ColorIfTerminal stdout (permitItem InfoS) V2
-  baseLogEnv <- initLogEnv "hwarden-agent" "production"
-  registerScribe "stdout" handleScribe defaultScribeSettings baseLogEnv
 
 socketNamespace :: Namespace
 socketNamespace = "socket"

@@ -26,6 +26,8 @@ library
     , text
     , unix
     , uuid
+    , unliftio
+    , mtl
   ghc-options:         -Wall
 
 executable hwarden-agent
