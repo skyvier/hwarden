@@ -5,7 +5,8 @@ module Hwarden.Bitwarden
     ListItemsError (..),
     UnlockError (..),
     BwItem (..), 
-    BwLogin (..)
+    BwLogin (..),
+    extractLoginItems
   )
 where
 

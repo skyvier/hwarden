@@ -5,7 +5,7 @@
 module Hwarden.App
   ( AgentT (..),
     Env (..),
-    initAgentLogEnv,
+    initAgentEnv,
     runAgentT,
   )
 where
@@ -69,6 +69,11 @@ instance KatipContext AgentT where
 runAgentT :: Env -> AgentT a -> IO a
 runAgentT env =
   flip runReaderT env . runAgentTInternal
+
+initAgentEnv :: IO Env 
+initAgentEnv = do
+  logEnv <- initAgentLogEnv 
+  return $ Env logEnv mempty "hwarden-agent"
 
 initAgentLogEnv :: IO LogEnv
 initAgentLogEnv = do
