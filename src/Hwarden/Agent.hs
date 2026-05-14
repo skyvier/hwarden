@@ -87,7 +87,7 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.FilePath ((</>))
-import System.IO (stderr)
+import System.IO (stdout)
 import System.Posix.Files (ownerModes, setFileMode)
 import Test.QuickCheck (Arbitrary (arbitrary))
 import qualified Data.UUID as UUID
@@ -327,9 +327,9 @@ logResponseSent response =
 
 initAgentLogEnv :: IO LogEnv
 initAgentLogEnv = do
-  handleScribe <- mkHandleScribe ColorIfTerminal stderr (permitItem InfoS) V2
+  handleScribe <- mkHandleScribe ColorIfTerminal stdout (permitItem InfoS) V2
   baseLogEnv <- initLogEnv "hwarden-agent" "production"
-  registerScribe "stderr" handleScribe defaultScribeSettings baseLogEnv
+  registerScribe "stdout" handleScribe defaultScribeSettings baseLogEnv
 
 socketNamespace :: Namespace
 socketNamespace = "socket"
