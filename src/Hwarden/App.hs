@@ -12,8 +12,10 @@ where
 
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Reader (MonadReader, ReaderT, asks, local, runReaderT)
+import Data.Text (Text)
+import qualified Data.Text as T
 import Hwarden.Bitwarden (Bitwarden)
-import Hwarden.Bitwarden.Real (RealBitwardenT (..))
+import Hwarden.Bitwarden.Real (HasBitwardenCliConfig (..), RealBitwardenT (..))
 import Katip
   ( ColorStrategy (ColorIfTerminal),
     Katip,
@@ -35,13 +37,17 @@ import Katip
     permitItem,
     registerScribe
   )
+import System.Environment (lookupEnv)
+import System.FilePath ((</>))
 import System.IO (stdout)
 import UnliftIO (MonadUnliftIO)
 
 data Env = Env
   { envLogEnv :: LogEnv,
     envLogContexts :: LogContexts,
-    envNamespace :: Namespace
+    envNamespace :: Namespace,
+    envBitwardenCliAppDataDir :: FilePath,
+    envBitwardenServerUrl :: Text
   }
 
 newtype AgentT a = AgentT
@@ -66,14 +72,27 @@ instance KatipContext AgentT where
     where
       updateNamespace env = env {envNamespace = f (envNamespace env)}
 
+instance HasBitwardenCliConfig AgentT where
+  getBitwardenCliAppDataDir = asks envBitwardenCliAppDataDir
+  getBitwardenServerUrl = asks envBitwardenServerUrl
+
 runAgentT :: Env -> AgentT a -> IO a
 runAgentT env =
   flip runReaderT env . runAgentTInternal
 
-initAgentEnv :: IO Env 
-initAgentEnv = do
-  logEnv <- initAgentLogEnv 
-  return $ Env logEnv mempty "hwarden-agent"
+initAgentEnv :: FilePath -> IO Env
+initAgentEnv runtimeDir = do
+  let defaultServerUrl = "https://vault.bitwarden.eu"
+      bitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
+  serverUrl <- lookupEnv "HWARDEN_SERVER_URL"
+  logEnv <- initAgentLogEnv
+  return $
+    Env
+      logEnv
+      mempty
+      "hwarden-agent"
+      bitwardenCliAppDataDir
+      (maybe defaultServerUrl T.pack serverUrl)
 
 initAgentLogEnv :: IO LogEnv
 initAgentLogEnv = do

@@ -3,6 +3,8 @@
 
 module Hwarden.Bitwarden.Real
   ( RealBitwardenT (..),
+    HasBitwardenCliConfig (..),
+    configureServer,
   )
 where
 
@@ -12,6 +14,7 @@ import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
+import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Bitwarden
   ( Bitwarden (..),
@@ -30,7 +33,7 @@ import System.Process
     StdStream (CreatePipe),
     createProcess,
     proc,
-    readProcessWithExitCode,
+    readCreateProcessWithExitCode,
     waitForProcess
   )
 
@@ -39,14 +42,23 @@ newtype RealBitwardenT m a = RealBitwardenT
   }
   deriving (Functor, Applicative, Monad, MonadIO, Katip, KatipContext)
 
-instance (KatipContext m, MonadIO m) => Bitwarden (RealBitwardenT m) where
+class Monad m => HasBitwardenCliConfig m where
+  getBitwardenCliAppDataDir :: m FilePath
+  getBitwardenServerUrl :: m Text
+
+instance HasBitwardenCliConfig m => HasBitwardenCliConfig (RealBitwardenT m) where
+  getBitwardenCliAppDataDir = RealBitwardenT getBitwardenCliAppDataDir
+  getBitwardenServerUrl = RealBitwardenT getBitwardenServerUrl
+
+instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (RealBitwardenT m) where
   unlock (Username email) (Password password) = RealBitwardenT $ do
     katipAddContext (sl "email" email) $
       logInfo "running bw login"
     let args = [T.unpack email, T.unpack password, "--raw"]
+    command <- buildCommand (proc "bw" ("login" : args))
     result <-
       liftIO
-        ( try (readProcessWithExitCode "bw" ("login" : args) "") ::
+        ( try (runCommand command) ::
             IO (Either SomeException (ExitCode, String, String))
         )
     pure $
@@ -62,11 +74,10 @@ instance (KatipContext m, MonadIO m) => Bitwarden (RealBitwardenT m) where
 
   listItems (SessionKey rawSessionKey) = RealBitwardenT $ do
     logInfo "running bw list items"
-    baseEnv <- liftIO getEnvironment
-    let command =
-          (proc "bw" ["list", "items"])
-            { env = Just (setEnvVar "BW_SESSION" (T.unpack rawSessionKey) baseEnv)
-            }
+    command <-
+      buildCommandWithExtraEnv
+        [("BW_SESSION", T.unpack rawSessionKey)]
+        (proc "bw" ["list", "items"])
     result <-
       liftIO
         ( try (readProcessBytes command) ::
@@ -85,6 +96,44 @@ instance (KatipContext m, MonadIO m) => Bitwarden (RealBitwardenT m) where
               pure (extractLoginItems bwItems)
           ExitFailure _ ->
             pure $ Left (ListItemsFailed (T.pack (BS8.unpack stderrBytes)))
+
+configureServer :: (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => RealBitwardenT m (Either Text ())
+configureServer = do
+  serverUrl <- getBitwardenServerUrl
+  logInfo "running bw config server"
+  command <- buildCommand (proc "bw" ["config", "server", T.unpack serverUrl])
+  result <-
+    liftIO
+      ( try (runCommand command) ::
+          IO (Either SomeException (ExitCode, String, String))
+      )
+  pure $
+    case result of
+      Left _ ->
+        Left "bw config server failed"
+      Right (exitCode, _, stderrText) ->
+        case exitCode of
+          ExitSuccess -> Right ()
+          ExitFailure _ ->
+            let trimmed = T.strip (T.pack stderrText)
+             in Left (if T.null trimmed then "bw config server failed" else trimmed)
+
+buildCommand :: (MonadIO m, HasBitwardenCliConfig m) => CreateProcess -> m CreateProcess
+buildCommand = buildCommandWithExtraEnv []
+
+buildCommandWithExtraEnv :: (MonadIO m, HasBitwardenCliConfig m) => [(String, String)] -> CreateProcess -> m CreateProcess
+buildCommandWithExtraEnv extraEnv command = do
+  appDataDir <- getBitwardenCliAppDataDir
+  baseEnv <- liftIO getEnvironment
+  pure
+    command
+      { env =
+          Just
+            (foldr (uncurry setEnvVar) (setEnvVar "BITWARDENCLI_APPDATA_DIR" appDataDir baseEnv) extraEnv)
+      }
+
+runCommand :: CreateProcess -> IO (ExitCode, String, String)
+runCommand command = readCreateProcessWithExitCode command ""
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
