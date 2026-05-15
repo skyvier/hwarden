@@ -10,6 +10,7 @@ where
 
 import Control.Exception (SomeException, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Reader (MonadReader, asks)
 import Data.Aeson (eitherDecodeStrict)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as BS
@@ -37,20 +38,19 @@ import System.Process
     waitForProcess
   )
 
-newtype RealBitwardenT m a = RealBitwardenT
+newtype RealBitwardenT r m a = RealBitwardenT
   { unrealBitwarden :: m a
   }
-  deriving (Functor, Applicative, Monad, MonadIO, Katip, KatipContext)
+  deriving (Functor, Applicative, Monad, MonadIO, Katip, KatipContext, MonadReader r)
 
-class Monad m => HasBitwardenCliConfig m where
-  getBitwardenCliAppDataDir :: m FilePath
-  getBitwardenServerUrl :: m Text
+class HasBitwardenCliConfig r where
+  bitwardenCliAppDataDir :: r -> FilePath
+  bitwardenServerUrl :: r -> Text
 
-instance HasBitwardenCliConfig m => HasBitwardenCliConfig (RealBitwardenT m) where
-  getBitwardenCliAppDataDir = RealBitwardenT getBitwardenCliAppDataDir
-  getBitwardenServerUrl = RealBitwardenT getBitwardenServerUrl
-
-instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (RealBitwardenT m) where
+instance
+  (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  Bitwarden (RealBitwardenT r m)
+  where
   unlock (Username email) (Password password) = RealBitwardenT $ do
     katipAddContext (sl "email" email) $
       logInfo "running bw login"
@@ -76,9 +76,11 @@ instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (Real
       )
       (ListItemsFailed . T.pack . BS8.unpack)
 
-configureServer :: (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => m (Either Text ())
+configureServer ::
+  (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  m (Either Text ())
 configureServer = do
-  serverUrl <- getBitwardenServerUrl
+  serverUrl <- asks bitwardenServerUrl
   logInfo "running bw config server"
   command <- isolatedBwProcess ["config", "server", T.unpack serverUrl]
   handleCheckedCommand
@@ -87,12 +89,19 @@ configureServer = do
     (const (Right ()))
     sanitizeCommandFailure
 
-isolatedBwProcess :: (MonadIO m, HasBitwardenCliConfig m) => [String] -> m CreateProcess
+isolatedBwProcess ::
+  (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  [String] ->
+  m CreateProcess
 isolatedBwProcess args = do
   isolatedEnv <- isolatedBwEnv
   pure (proc "bw" args) {env = Just isolatedEnv}
 
-authenticatedBwProcess :: (MonadIO m, HasBitwardenCliConfig m) => SessionKey -> [String] -> m CreateProcess
+authenticatedBwProcess ::
+  (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  SessionKey ->
+  [String] ->
+  m CreateProcess
 authenticatedBwProcess (SessionKey rawSessionKey) args = do
   isolatedEnv <- isolatedBwEnv
   pure
@@ -100,9 +109,11 @@ authenticatedBwProcess (SessionKey rawSessionKey) args = do
       { env = Just (setEnvVar "BW_SESSION" (T.unpack rawSessionKey) isolatedEnv)
       }
 
-isolatedBwEnv :: (MonadIO m, HasBitwardenCliConfig m) => m [(String, String)]
+isolatedBwEnv ::
+  (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  m [(String, String)]
 isolatedBwEnv = do
-  appDataDir <- getBitwardenCliAppDataDir
+  appDataDir <- asks bitwardenCliAppDataDir
   baseEnv <- liftIO getEnvironment
   pure (setEnvVar "BITWARDENCLI_APPDATA_DIR" appDataDir baseEnv)
 

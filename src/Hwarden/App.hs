@@ -13,9 +13,11 @@ where
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Reader (MonadReader, ReaderT, asks, local, runReaderT)
 import Data.Text (Text)
-import qualified Data.Text as T
-import Hwarden.Bitwarden (Bitwarden)
-import Hwarden.Bitwarden.Real (HasBitwardenCliConfig (..), RealBitwardenT (..))
+import Hwarden.Bitwarden (Bitwarden, determineBitwardenServerUrl)
+import Hwarden.Bitwarden.Real
+  ( HasBitwardenCliConfig (..),
+    RealBitwardenT (..)
+  )
 import Katip
   ( ColorStrategy (ColorIfTerminal),
     Katip,
@@ -54,7 +56,7 @@ newtype AgentT a = AgentT
   { runAgentTInternal :: ReaderT Env IO a
   }
   deriving (Functor, Applicative, Monad, MonadIO, MonadReader Env, MonadUnliftIO)
-  deriving (Bitwarden) via (RealBitwardenT AgentT)
+  deriving (Bitwarden) via (RealBitwardenT Env AgentT)
 
 instance Katip AgentT where
   getLogEnv = asks envLogEnv
@@ -72,9 +74,9 @@ instance KatipContext AgentT where
     where
       updateNamespace env = env {envNamespace = f (envNamespace env)}
 
-instance HasBitwardenCliConfig AgentT where
-  getBitwardenCliAppDataDir = asks envBitwardenCliAppDataDir
-  getBitwardenServerUrl = asks envBitwardenServerUrl
+instance HasBitwardenCliConfig Env where
+  bitwardenCliAppDataDir = envBitwardenCliAppDataDir
+  bitwardenServerUrl = envBitwardenServerUrl
 
 runAgentT :: Env -> AgentT a -> IO a
 runAgentT env =
@@ -82,8 +84,7 @@ runAgentT env =
 
 initAgentEnv :: FilePath -> IO Env
 initAgentEnv runtimeDir = do
-  let defaultServerUrl = "https://vault.bitwarden.eu"
-      bitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
+  let isolatedBitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
   serverUrl <- lookupEnv "HWARDEN_SERVER_URL"
   logEnv <- initAgentLogEnv
   return $
@@ -91,8 +92,8 @@ initAgentEnv runtimeDir = do
       logEnv
       mempty
       "hwarden-agent"
-      bitwardenCliAppDataDir
-      (maybe defaultServerUrl T.pack serverUrl)
+      isolatedBitwardenCliAppDataDir
+      (determineBitwardenServerUrl serverUrl)
 
 initAgentLogEnv :: IO LogEnv
 initAgentLogEnv = do

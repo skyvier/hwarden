@@ -8,7 +8,9 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Hwarden.Agent as Agent
+import Hwarden.Bitwarden (determineBitwardenServerUrl)
 import Hwarden.Socket (recvAll)
+import qualified Data.Text as T
 import Network.Socket
   ( Family (AF_UNIX),
     ShutdownCmd (ShutdownSend),
@@ -71,6 +73,10 @@ integrationTests :: TestTree
 integrationTests =
   testGroup
     "integration"
+    -- setupAgent waits for the daemon to finish startup, and startup always
+    -- runs `bw config server` first. That means even tests that only create
+    -- and tear down the agent still exercise the fake `bw` script and verify
+    -- the isolated BITWARDENCLI_APPDATA_DIR/server bootstrap path.
     [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
         agent <- setupAgent defaultAgentConfig
         response <- sendRequest (socketPath agent) Agent.Status
@@ -177,20 +183,26 @@ setupAgent agentConfig = do
       fakeBinDir = tmpDir </> "bin"
       agentSocketPath = runtimeDir </> "hwarden" </> "agent.sock"
       expectedBitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
-      serverUrl = maybe "https://vault.bitwarden.eu" id (agentServerUrlOverride agentConfig)
+      serverUrl = determineBitwardenServerUrl (agentServerUrlOverride agentConfig)
   createDirectoryIfMissing True runtimeDir
   createDirectoryIfMissing True fakeBinDir
-  writeFakeBw fakeBinDir expectedBitwardenCliAppDataDir serverUrl (agentBwBehavior agentConfig)
+  writeFakeBw
+    fakeBinDir
+    expectedBitwardenCliAppDataDir
+    (T.unpack serverUrl)
+    (agentBwBehavior agentConfig)
   hwardenAgent <- requireExecutable "hwarden-agent"
   bwReal <- requireExecutable "bw"
   baseEnv <- getEnvironment
   let pathValue = fakeBinDir <> ":" <> takeDirectory bwReal
-      agentEnv =
-        maybe
-          id
+      applyServerUrlOverride =
+        maybe id
           (setEnvVar "HWARDEN_SERVER_URL")
           (agentServerUrlOverride agentConfig)
-          (setEnvVar "PATH" pathValue (setEnvVar "XDG_RUNTIME_DIR" runtimeDir baseEnv))
+      agentBaseEnv =
+        setEnvVar "PATH" pathValue
+          (setEnvVar "XDG_RUNTIME_DIR" runtimeDir baseEnv)
+      agentEnv = applyServerUrlOverride agentBaseEnv
 
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   waitForSocket agentSocketPath

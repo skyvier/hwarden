@@ -141,20 +141,20 @@ filesystemTests :: TestTree
 filesystemTests =
   testGroup
     "filesystem"
-    [ testCase "prepareSocketDir creates missing directories with owner-only permissions" $ do
+    [ testCase "prepareRuntimeDir creates missing directories with owner-only permissions" $ do
         root <- createTempDir "hwarden-agent-test"
         let socketDir = root </> "nested" </> "runtime" </> "hwarden"
-        Agent.prepareSocketDir socketDir
+        Agent.prepareRuntimeDir socketDir
         exists <- doesPathExist socketDir
         assertBool "socket directory should exist" exists
         assertDirectoryOwnerOnly socketDir
         removeDirectoryRecursive root
-    , testCase "prepareSocketDir tightens existing directory permissions" $ do
+    , testCase "prepareRuntimeDir tightens existing directory permissions" $ do
         root <- createTempDir "hwarden-agent-test"
         let socketDir = root </> "hwarden"
         createDirectoryIfMissing True socketDir
         setFileMode socketDir 0o755
-        Agent.prepareSocketDir socketDir
+        Agent.prepareRuntimeDir socketDir
         assertDirectoryOwnerOnly socketDir
         removeDirectoryRecursive root
     , testCase "removeExistingSocket deletes an existing file" $ do

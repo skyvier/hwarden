@@ -18,7 +18,7 @@ module Hwarden.Agent
     handleUnlock,
     handleRequest,
     handleRequestWith,
-    prepareSocketDir,
+    prepareRuntimeDir,
     removeExistingSocket,
     runAgent,
     sanitizeUnlockError
@@ -170,8 +170,8 @@ runAgent = do
       socketPath = socketDir </> "agent.sock"
       bitwardenCliAppDataDir = envBitwardenCliAppDataDir env
 
-  prepareSocketDir socketDir
-  prepareSocketDir bitwardenCliAppDataDir
+  prepareRuntimeDir socketDir
+  prepareRuntimeDir bitwardenCliAppDataDir
   removeExistingSocket socketPath
   bootstrapBitwardenCli env
 
@@ -193,10 +193,10 @@ requireRuntimeDir = do
     Just path -> pure path
     Nothing -> die "XDG_RUNTIME_DIR is not set"
 
-prepareSocketDir :: FilePath -> IO ()
-prepareSocketDir socketDir = do
-  createDirectoryIfMissing True socketDir
-  setFileMode socketDir ownerModes
+prepareRuntimeDir :: FilePath -> IO ()
+prepareRuntimeDir runtimeDir = do
+  createDirectoryIfMissing True runtimeDir
+  setFileMode runtimeDir ownerModes
 
 removeExistingSocket :: FilePath -> IO ()
 removeExistingSocket socketPath = do

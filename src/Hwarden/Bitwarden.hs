@@ -4,8 +4,10 @@ module Hwarden.Bitwarden
   ( Bitwarden (..),
     ListItemsError (..),
     UnlockError (..),
-    BwItem (..), 
+    BwItem (..),
     BwLogin (..),
+    defaultBitwardenServerUrl,
+    determineBitwardenServerUrl,
     extractLoginItems
   )
 where
@@ -49,6 +51,12 @@ instance Arbitrary ListItemsError where
 class Monad m => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
+
+defaultBitwardenServerUrl :: Text
+defaultBitwardenServerUrl = "https://vault.bitwarden.eu"
+
+determineBitwardenServerUrl :: Maybe String -> Text
+determineBitwardenServerUrl = maybe defaultBitwardenServerUrl T.pack
 
 data BwItem = BwItem
   { bwItemId :: Text,
