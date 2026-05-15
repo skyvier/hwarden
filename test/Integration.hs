@@ -56,6 +56,11 @@ data BwBehavior = BwBehavior
     listItemsBehavior :: CommandBehavior
   }
 
+data AgentConfig = AgentConfig
+  { agentBwBehavior :: BwBehavior,
+    agentServerUrlOverride :: Maybe String
+  }
+
 data AgentResource = AgentResource
   { socketPath :: FilePath,
     processHandle :: ProcessHandle,
@@ -67,15 +72,25 @@ integrationTests =
   testGroup
     "integration"
     [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
-        agent <- setupAgent defaultFailingBw
+        agent <- setupAgent defaultAgentConfig
         response <- sendRequest (socketPath agent) Agent.Status
         cleanupAgent agent
         assertEqual
           "expected locked status response"
           (Agent.Success "locked")
           response
+    , testCase "agent startup configures the default Bitwarden EU server in the isolated profile" $ do
+        agent <- setupAgent defaultAgentConfig
+        cleanupAgent agent
+    , testCase "agent startup honors HWARDEN_SERVER_URL in the isolated profile" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentServerUrlOverride = Just "https://vault.example.test"
+              }
+        cleanupAgent agent
     , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ do
-        agent <- setupAgent defaultFailingBw
+        agent <- setupAgent defaultAgentConfig
         response <- sendRequest (socketPath agent) Agent.ListItems
         cleanupAgent agent
         assertEqual
@@ -83,7 +98,11 @@ integrationTests =
           (Agent.Failure "locked")
           response
     , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $ do
-        agent <- setupAgent (defaultFailingBw {unlockBehavior = CommandSucceeds "session-key-123"})
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior = defaultFailingBw {unlockBehavior = CommandSucceeds "session-key-123"}
+              }
         initialStatus <- sendRequest (socketPath agent) Agent.Status
         unlockResponse <-
           sendRequest
@@ -96,10 +115,13 @@ integrationTests =
         assertEqual "expected unlocked status after successful unlock" (Agent.Success "unlocked") finalStatus
     , testCase "sending unlock then list-items via the socket returns login item summaries" $ do
         agent <-
-          setupAgent $
-            BwBehavior
-              { unlockBehavior = CommandSucceeds "session-key-123",
-                listItemsBehavior = CommandSucceeds listItemsPayload
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehavior = CommandSucceeds listItemsPayload
+                    }
               }
         unlockResponse <-
           sendRequest
@@ -113,7 +135,7 @@ integrationTests =
           (Agent.ItemList listItemsSummary)
           itemsResponse
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
-        agent <- setupAgent defaultFailingBw
+        agent <- setupAgent defaultAgentConfig
         initialStatus <- sendRequest (socketPath agent) Agent.Status
         unlockResponse <-
           sendRequest
@@ -125,7 +147,7 @@ integrationTests =
         assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
         assertEqual "expected locked status after failed unlock" (Agent.Success "locked") finalStatus
     , testCase "sending failed unlock then list-items via the socket still reports locked" $ do
-        agent <- setupAgent defaultFailingBw
+        agent <- setupAgent defaultAgentConfig
         unlockResponse <-
           sendRequest
             (socketPath agent)
@@ -135,7 +157,7 @@ integrationTests =
         assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
         assertEqual "expected locked list-items response after failed unlock" (Agent.Failure "locked") itemsResponse
     , testCase "sending invalid credentials via the socket results in failure message" $ do
-        agent <- setupAgent defaultFailingBw
+        agent <- setupAgent defaultAgentConfig
         response <-
           sendRequest
             (socketPath agent)
@@ -148,20 +170,27 @@ integrationTests =
           response
     ]
 
-setupAgent :: BwBehavior -> IO AgentResource
-setupAgent bwBehavior = do
+setupAgent :: AgentConfig -> IO AgentResource
+setupAgent agentConfig = do
   tmpDir <- createTempDir "hwarden-agent-test"
   let runtimeDir = tmpDir </> "runtime"
       fakeBinDir = tmpDir </> "bin"
       agentSocketPath = runtimeDir </> "hwarden" </> "agent.sock"
+      expectedBitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
+      serverUrl = maybe "https://vault.bitwarden.eu" id (agentServerUrlOverride agentConfig)
   createDirectoryIfMissing True runtimeDir
   createDirectoryIfMissing True fakeBinDir
-  writeFakeBw fakeBinDir bwBehavior
+  writeFakeBw fakeBinDir expectedBitwardenCliAppDataDir serverUrl (agentBwBehavior agentConfig)
   hwardenAgent <- requireExecutable "hwarden-agent"
   bwReal <- requireExecutable "bw"
   baseEnv <- getEnvironment
   let pathValue = fakeBinDir <> ":" <> takeDirectory bwReal
-      agentEnv = setEnvVar "PATH" pathValue (setEnvVar "XDG_RUNTIME_DIR" runtimeDir baseEnv)
+      agentEnv =
+        maybe
+          id
+          (setEnvVar "HWARDEN_SERVER_URL")
+          (agentServerUrlOverride agentConfig)
+          (setEnvVar "PATH" pathValue (setEnvVar "XDG_RUNTIME_DIR" runtimeDir baseEnv))
 
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   waitForSocket agentSocketPath
@@ -215,24 +244,49 @@ sendRequest agentSocketPath request =
       connect conn (SockAddrUnix agentSocketPath)
       pure conn
 
-writeFakeBw :: FilePath -> BwBehavior -> IO ()
-writeFakeBw fakeBinDir bwBehavior = do
+writeFakeBw :: FilePath -> FilePath -> String -> BwBehavior -> IO ()
+writeFakeBw fakeBinDir expectedAppDataDir expectedServerUrl bwBehavior = do
   let fakeBw = fakeBinDir </> "bw"
   BS8.writeFile
     fakeBw
-    (scriptFor bwBehavior)
+    (scriptFor expectedAppDataDir expectedServerUrl bwBehavior)
   permissions <- getPermissions fakeBw
   setPermissions fakeBw permissions {executable = True}
 
-scriptFor :: BwBehavior -> BS8.ByteString
-scriptFor bwBehavior =
+scriptFor :: FilePath -> String -> BwBehavior -> BS8.ByteString
+scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
   BS8.unlines
     [ "#!/bin/sh",
+      "if [ -z \"$BITWARDENCLI_APPDATA_DIR\" ]; then",
+      "  printf '%s\\n' 'BITWARDENCLI_APPDATA_DIR was not set' 1>&2",
+      "  exit 1",
+      "fi",
+      "if [ \"$BITWARDENCLI_APPDATA_DIR\" != \"" <> BS8.pack expectedAppDataDir <> "\" ]; then",
+      "  printf '%s\\n' 'BITWARDENCLI_APPDATA_DIR did not match expected path' 1>&2",
+      "  exit 1",
+      "fi",
       "case \"$1\" in",
+      "  config)",
+      "    if [ \"$2\" = \"server\" ] && [ \"$3\" = \"" <> BS8.pack expectedServerUrl <> "\" ]; then",
+      "      : > \"$BITWARDENCLI_APPDATA_DIR/configured\"",
+      "      exit 0",
+      "    else",
+      "      printf '%s\\n' 'unexpected bw config server invocation' 1>&2",
+      "      exit 1",
+      "    fi",
+      "    ;;",
       "  login)",
+      "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/configured\" ]; then",
+      "      printf '%s\\n' 'server was not configured before login' 1>&2",
+      "      exit 1",
+      "    fi",
       emitBehavior "    " (unlockBehavior bwBehavior),
       "    ;;",
       "  list)",
+      "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/configured\" ]; then",
+      "      printf '%s\\n' 'server was not configured before list' 1>&2",
+      "      exit 1",
+      "    fi",
       "    if [ \"$2\" = \"items\" ]; then",
       emitBehavior "      " (listItemsBehavior bwBehavior),
       "    else",
@@ -270,6 +324,13 @@ defaultFailingBw =
   BwBehavior
     { unlockBehavior = CommandFails "credentials were incorrect",
       listItemsBehavior = CommandFails "bw list items failed"
+    }
+
+defaultAgentConfig :: AgentConfig
+defaultAgentConfig =
+  AgentConfig
+    { agentBwBehavior = defaultFailingBw,
+      agentServerUrlOverride = Nothing
     }
 
 listItemsPayload :: BS8.ByteString

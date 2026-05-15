@@ -6,6 +6,11 @@ Tiny Haskell daemon for one job: accept a local Unix socket JSON request, unlock
 
 `XDG_RUNTIME_DIR` must be set.
 
+Optional:
+
+- `HWARDEN_SERVER_URL`
+  Defaults to `https://vault.bitwarden.eu`.
+
 ```sh
 cabal run hwarden-agent
 ```
@@ -14,9 +19,15 @@ The daemon creates:
 
 ```text
 $XDG_RUNTIME_DIR/hwarden/agent.sock
+$XDG_RUNTIME_DIR/hwarden/bitwarden-cli
 ```
 
-The directory is created if needed and forced to mode `0700`.
+Both directories are created if needed and forced to mode `0700`.
+
+The agent keeps its Bitwarden CLI state in its own isolated profile under
+`$XDG_RUNTIME_DIR/hwarden/bitwarden-cli`, so it does not share the user's
+default `bw` state. This isolated profile is session-scoped and is not expected
+to persist across reboot.
 
 ## Manual testing with nc
 

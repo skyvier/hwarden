@@ -44,6 +44,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Bitwarden (Bitwarden (listItems, unlock), ListItemsError (..), UnlockError (..))
+import Hwarden.Bitwarden.Real (RealBitwardenT (unrealBitwarden), configureServer)
 import Hwarden.Logging (logInfo)
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), Password (..), SessionKey (..), Username (..))
@@ -163,13 +164,16 @@ instance FromJSON Response where
 
 runAgent :: IO ()
 runAgent = do
-  env <- initAgentEnv
   runtimeDir <- requireRuntimeDir
+  env <- initAgentEnv runtimeDir
   let socketDir = runtimeDir </> "hwarden"
       socketPath = socketDir </> "agent.sock"
+      bitwardenCliAppDataDir = envBitwardenCliAppDataDir env
 
   prepareSocketDir socketDir
+  prepareSocketDir bitwardenCliAppDataDir
   removeExistingSocket socketPath
+  bootstrapBitwardenCli env
 
   agentStateVar <- newMVar Locked
   sock <- socket AF_UNIX Stream defaultProtocol
@@ -201,6 +205,13 @@ removeExistingSocket socketPath = do
 
 cleanupSocket :: FilePath -> IO ()
 cleanupSocket socketPath = removeExistingSocket socketPath
+
+bootstrapBitwardenCli :: Env -> IO ()
+bootstrapBitwardenCli env = do
+  result <- runAgentT env (unrealBitwarden configureServer)
+  case result of
+    Left err -> die ("failed to configure bitwarden server: " <> T.unpack err)
+    Right () -> pure ()
 
 handleConnection :: Env -> MVar AgentState -> Socket -> IO ()
 handleConnection agentEnv agentStateVar conn =
