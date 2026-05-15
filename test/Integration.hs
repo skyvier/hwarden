@@ -35,6 +35,7 @@ import System.Directory
     setPermissions
   )
 import System.Environment (getEnvironment)
+import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose, openTempFile)
 import System.Process
@@ -54,7 +55,8 @@ data CommandBehavior
   | CommandFails BS8.ByteString
 
 data BwBehavior = BwBehavior
-  { unlockBehavior :: CommandBehavior,
+  { configServerBehavior :: CommandBehavior,
+    unlockBehavior :: CommandBehavior,
     listItemsBehavior :: CommandBehavior
   }
 
@@ -73,10 +75,6 @@ integrationTests :: TestTree
 integrationTests =
   testGroup
     "integration"
-    -- setupAgent waits for the daemon to finish startup, and startup always
-    -- runs `bw config server` first. That means even tests that only create
-    -- and tear down the agent still exercise the fake `bw` script and verify
-    -- the isolated BITWARDENCLI_APPDATA_DIR/server bootstrap path.
     [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
         agent <- setupAgent defaultAgentConfig
         response <- sendRequest (socketPath agent) Agent.Status
@@ -85,6 +83,11 @@ integrationTests =
           "expected locked status response"
           (Agent.Success "locked")
           response
+
+    -- setupAgent waits for the daemon to finish startup, and startup always
+    -- runs `bw config server` first. That means even tests that only create
+    -- and tear down the agent still exercise the fake `bw` script and verify
+    -- the isolated BITWARDENCLI_APPDATA_DIR/server bootstrap path.
     , testCase "agent startup configures the default Bitwarden EU server in the isolated profile" $ do
         agent <- setupAgent defaultAgentConfig
         cleanupAgent agent
@@ -95,6 +98,34 @@ integrationTests =
               { agentServerUrlOverride = Just "https://vault.example.test"
               }
         cleanupAgent agent
+    , testCase "agent startup fails before creating the socket if bw config server fails" $ do
+        let runtimeDir = "runtime"
+            fakeBinDir = "bin"
+            agentSocketPath = runtimeDir </> "hwarden" </> "agent.sock"
+        tmpDir <- createTempDir "hwarden-agent-test"
+        createDirectoryIfMissing True (tmpDir </> runtimeDir)
+        createDirectoryIfMissing True (tmpDir </> fakeBinDir)
+        let expectedBitwardenCliAppDataDir = tmpDir </> runtimeDir </> "hwarden" </> "bitwarden-cli"
+        writeFakeBw
+          (tmpDir </> fakeBinDir)
+          expectedBitwardenCliAppDataDir
+          (T.unpack (determineBitwardenServerUrl Nothing))
+          defaultFailingBw {configServerBehavior = CommandFails "config failed"}
+        hwardenAgent <- requireExecutable "hwarden-agent"
+        bwReal <- requireExecutable "bw"
+        baseEnv <- getEnvironment
+        let pathValue = (tmpDir </> fakeBinDir) <> ":" <> takeDirectory bwReal
+            agentEnv =
+              setEnvVar "PATH" pathValue
+                (setEnvVar "XDG_RUNTIME_DIR" (tmpDir </> runtimeDir) baseEnv)
+        handle <- spawnAgent hwardenAgent tmpDir agentEnv
+        threadDelay 200000
+        exitCode <- waitForProcess handle
+        socketExists <- doesFileExist (tmpDir </> agentSocketPath)
+        removeDirectoryRecursive tmpDir
+        assertBool "expected startup failure before socket creation" (exitCode /= ExitSuccess)
+        assertBool "socket should not be created when server bootstrap fails" (not socketExists)
+
     , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ do
         agent <- setupAgent defaultAgentConfig
         response <- sendRequest (socketPath agent) Agent.ListItems
@@ -125,7 +156,8 @@ integrationTests =
             defaultAgentConfig
               { agentBwBehavior =
                   BwBehavior
-                    { unlockBehavior = CommandSucceeds "session-key-123",
+                    { configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
                       listItemsBehavior = CommandSucceeds listItemsPayload
                     }
               }
@@ -280,8 +312,7 @@ scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
       "case \"$1\" in",
       "  config)",
       "    if [ \"$2\" = \"server\" ] && [ \"$3\" = \"" <> BS8.pack expectedServerUrl <> "\" ]; then",
-      "      : > \"$BITWARDENCLI_APPDATA_DIR/configured\"",
-      "      exit 0",
+      emitConfigBehavior "      " (configServerBehavior bwBehavior),
       "    else",
       "      printf '%s\\n' 'unexpected bw config server invocation' 1>&2",
       "      exit 1",
@@ -331,10 +362,27 @@ emitBehavior indent commandBehavior =
           indent <> "exit 1"
         ]
 
+emitConfigBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
+emitConfigBehavior indent commandBehavior =
+  case commandBehavior of
+    CommandSucceeds _ ->
+      BS8.unlines
+        [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/configured\"",
+          indent <> "exit 0"
+        ]
+    CommandFails errMessage ->
+      BS8.unlines
+        [ indent <> "while IFS= read -r line; do printf '%s\\n' \"$line\" 1>&2; done <<'EOF'",
+          errMessage,
+          "EOF",
+          indent <> "exit 1"
+        ]
+
 defaultFailingBw :: BwBehavior
 defaultFailingBw =
   BwBehavior
-    { unlockBehavior = CommandFails "credentials were incorrect",
+    { configServerBehavior = CommandSucceeds "",
+      unlockBehavior = CommandFails "credentials were incorrect",
       listItemsBehavior = CommandFails "bw list items failed"
     }
 
