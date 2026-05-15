@@ -56,7 +56,7 @@ instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (Real
       logInfo "running bw login"
     let args = [T.unpack email, T.unpack password, "--raw"]
     command <- isolatedBwProcess ("login" : args)
-    runCheckedCommand
+    handleCheckedCommand
       (runCommand command)
       UnlockUnavailable
       (Right . SessionKey . T.strip . T.pack)
@@ -65,7 +65,7 @@ instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (Real
   listItems (SessionKey rawSessionKey) = RealBitwardenT $ do
     logInfo "running bw list items"
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["list", "items"]
-    runCheckedByteCommand
+    handleCheckedByteCommand
       (readProcessBytes command)
       ListItemsUnavailable
       ( \stdoutBytes -> do
@@ -81,7 +81,7 @@ configureServer = do
   serverUrl <- getBitwardenServerUrl
   logInfo "running bw config server"
   command <- isolatedBwProcess ["config", "server", T.unpack serverUrl]
-  runCheckedCommand
+  handleCheckedCommand
     (runCommand command)
     "bw config server failed"
     (const (Right ()))
@@ -109,14 +109,14 @@ isolatedBwEnv = do
 runCommand :: CreateProcess -> IO (ExitCode, String, String)
 runCommand command = readCreateProcessWithExitCode command ""
 
-runCheckedCommand ::
+handleCheckedCommand ::
   MonadIO m =>
   IO (ExitCode, String, String) ->
   err ->
   (String -> Either err a) ->
   (String -> err) ->
   m (Either err a)
-runCheckedCommand action unavailable handleSuccess handleFailure = do
+handleCheckedCommand action unavailable handleSuccess handleFailure = do
   result <-
     liftIO
       (try action :: IO (Either SomeException (ExitCode, String, String)))
@@ -129,14 +129,14 @@ runCheckedCommand action unavailable handleSuccess handleFailure = do
           ExitSuccess -> handleSuccess stdoutText
           ExitFailure _ -> Left (handleFailure stderrText)
 
-runCheckedByteCommand ::
+handleCheckedByteCommand ::
   MonadIO m =>
   IO (ExitCode, BS.ByteString, BS.ByteString) ->
   err ->
   (BS.ByteString -> Either err a) ->
   (BS.ByteString -> err) ->
   m (Either err a)
-runCheckedByteCommand action unavailable handleSuccess handleFailure = do
+handleCheckedByteCommand action unavailable handleSuccess handleFailure = do
   result <-
     liftIO
       (try action :: IO (Either SomeException (ExitCode, BS.ByteString, BS.ByteString)))
