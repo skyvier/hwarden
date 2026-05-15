@@ -87,6 +87,12 @@ parsingTests =
                 "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
         Aeson.eitherDecodeStrict' payload
           @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+    , testCase "determineBitwardenServerUrl uses the EU default when unset" $
+        Bitwarden.determineBitwardenServerUrl Nothing
+          @?= Bitwarden.defaultBitwardenServerUrl
+    , testCase "determineBitwardenServerUrl uses the override when set" $
+        Bitwarden.determineBitwardenServerUrl (Just "https://vault.example.test")
+          @?= "https://vault.example.test"
     , testCase "bitwarden item parser decodes a login item" $ do
         let payload =
               BS8.pack
