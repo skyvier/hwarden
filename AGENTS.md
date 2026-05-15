@@ -28,3 +28,31 @@
 - Keep error messages free of leaked passwords.
 - Maintain strict filesystem permissions for the socket directory.
 - If behavior changes, update `README.md` with the new request or response contract.
+
+## Git commit messages
+
+When writing Git commit messages, follow this format exactly:
+
+- The first line is the title.
+- Ideally, the title should be less than 50 characters.
+    - Hard limit is 72 characters
+- The title must be in imperative mood and fit this sentence:
+
+  "This commit will <title>"
+
+  Good examples:
+  - Clean up unused imports
+  - Introduce SIGTERM handler
+  - Add Bitwarden item lookup logging
+
+- After the title, write exactly one empty line.
+- Then write a body with one concise paragraph per topic.
+- Wrap all body lines at less than 72 characters.
+- The body should answer these questions when relevant:
+  - What was the previous behavior?
+  - How does this commit change the behavior?
+  - What implementation details are worth remembering?
+
+Do not use a one-line commit message unless the change is truly trivial.
+Do not include bullet points unless they make the body substantially clearer.
+Do not include literal "\n" sequences. Use real newlines.
