@@ -44,7 +44,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Bitwarden (Bitwarden (listItems, unlock), ListItemsError (..), UnlockError (..))
-import Hwarden.Bitwarden.Real (RealBitwardenT (unrealBitwarden), configureServer)
+import Hwarden.Bitwarden.Real (configureServer)
 import Hwarden.Logging (logInfo)
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), Password (..), SessionKey (..), Username (..))
@@ -208,7 +208,7 @@ cleanupSocket socketPath = removeExistingSocket socketPath
 
 bootstrapBitwardenCli :: Env -> IO ()
 bootstrapBitwardenCli env = do
-  result <- runAgentT env (unrealBitwarden configureServer)
+  result <- runAgentT env configureServer
   case result of
     Left err -> die ("failed to configure bitwarden server: " <> T.unpack err)
     Right () -> pure ()

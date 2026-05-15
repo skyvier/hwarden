@@ -97,7 +97,7 @@ instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (Real
           ExitFailure _ ->
             pure $ Left (ListItemsFailed (T.pack (BS8.unpack stderrBytes)))
 
-configureServer :: (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => RealBitwardenT m (Either Text ())
+configureServer :: (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => m (Either Text ())
 configureServer = do
   serverUrl <- getBitwardenServerUrl
   logInfo "running bw config server"
