@@ -55,85 +55,104 @@ instance (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => Bitwarden (Real
     katipAddContext (sl "email" email) $
       logInfo "running bw login"
     let args = [T.unpack email, T.unpack password, "--raw"]
-    command <- buildCommand (proc "bw" ("login" : args))
-    result <-
-      liftIO
-        ( try (runCommand command) ::
-            IO (Either SomeException (ExitCode, String, String))
-        )
-    pure $
-      case result of
-        Left _ ->
-          Left UnlockUnavailable
-        Right (exitCode, stdoutText, stderrText) ->
-          case exitCode of
-            ExitSuccess ->
-              Right (SessionKey (T.strip (T.pack stdoutText)))
-            ExitFailure _ ->
-              Left (UnlockFailed (T.pack stderrText))
+    command <- isolatedBwProcess ("login" : args)
+    runCheckedCommand
+      (runCommand command)
+      UnlockUnavailable
+      (Right . SessionKey . T.strip . T.pack)
+      (UnlockFailed . T.pack)
 
   listItems (SessionKey rawSessionKey) = RealBitwardenT $ do
     logInfo "running bw list items"
-    command <-
-      buildCommandWithExtraEnv
-        [("BW_SESSION", T.unpack rawSessionKey)]
-        (proc "bw" ["list", "items"])
-    result <-
-      liftIO
-        ( try (readProcessBytes command) ::
-            IO (Either SomeException (ExitCode, BS.ByteString, BS.ByteString))
-        )
-    case result of
-      Left _ ->
-        pure $ Left ListItemsUnavailable
-      Right (exitCode, stdoutBytes, stderrBytes) ->
-        case exitCode of
-          ExitSuccess -> do
-            pure $ do
-              bwItems <-
-                first (ListItemsFailed . T.pack) $
-                  eitherDecodeStrict stdoutBytes
-              pure (extractLoginItems bwItems)
-          ExitFailure _ ->
-            pure $ Left (ListItemsFailed (T.pack (BS8.unpack stderrBytes)))
+    command <- authenticatedBwProcess (SessionKey rawSessionKey) ["list", "items"]
+    runCheckedByteCommand
+      (readProcessBytes command)
+      ListItemsUnavailable
+      ( \stdoutBytes -> do
+          bwItems <-
+            first (ListItemsFailed . T.pack) $
+              eitherDecodeStrict stdoutBytes
+          pure (extractLoginItems bwItems)
+      )
+      (ListItemsFailed . T.pack . BS8.unpack)
 
 configureServer :: (KatipContext m, MonadIO m, HasBitwardenCliConfig m) => m (Either Text ())
 configureServer = do
   serverUrl <- getBitwardenServerUrl
   logInfo "running bw config server"
-  command <- buildCommand (proc "bw" ["config", "server", T.unpack serverUrl])
-  result <-
-    liftIO
-      ( try (runCommand command) ::
-          IO (Either SomeException (ExitCode, String, String))
-      )
-  pure $
-    case result of
-      Left _ ->
-        Left "bw config server failed"
-      Right (exitCode, _, stderrText) ->
-        case exitCode of
-          ExitSuccess -> Right ()
-          ExitFailure _ ->
-            let trimmed = T.strip (T.pack stderrText)
-             in Left (if T.null trimmed then "bw config server failed" else trimmed)
+  command <- isolatedBwProcess ["config", "server", T.unpack serverUrl]
+  runCheckedCommand
+    (runCommand command)
+    "bw config server failed"
+    (const (Right ()))
+    sanitizeCommandFailure
 
-buildCommand :: (MonadIO m, HasBitwardenCliConfig m) => CreateProcess -> m CreateProcess
-buildCommand = buildCommandWithExtraEnv []
+isolatedBwProcess :: (MonadIO m, HasBitwardenCliConfig m) => [String] -> m CreateProcess
+isolatedBwProcess args = do
+  isolatedEnv <- isolatedBwEnv
+  pure (proc "bw" args) {env = Just isolatedEnv}
 
-buildCommandWithExtraEnv :: (MonadIO m, HasBitwardenCliConfig m) => [(String, String)] -> CreateProcess -> m CreateProcess
-buildCommandWithExtraEnv extraEnv command = do
+authenticatedBwProcess :: (MonadIO m, HasBitwardenCliConfig m) => SessionKey -> [String] -> m CreateProcess
+authenticatedBwProcess (SessionKey rawSessionKey) args = do
+  isolatedEnv <- isolatedBwEnv
+  pure
+    (proc "bw" args)
+      { env = Just (setEnvVar "BW_SESSION" (T.unpack rawSessionKey) isolatedEnv)
+      }
+
+isolatedBwEnv :: (MonadIO m, HasBitwardenCliConfig m) => m [(String, String)]
+isolatedBwEnv = do
   appDataDir <- getBitwardenCliAppDataDir
   baseEnv <- liftIO getEnvironment
-  pure
-    command
-      { env =
-          Just
-            (foldr (uncurry setEnvVar) (setEnvVar "BITWARDENCLI_APPDATA_DIR" appDataDir baseEnv) extraEnv)
-      }
+  pure (setEnvVar "BITWARDENCLI_APPDATA_DIR" appDataDir baseEnv)
 
 runCommand :: CreateProcess -> IO (ExitCode, String, String)
 runCommand command = readCreateProcessWithExitCode command ""
+
+runCheckedCommand ::
+  MonadIO m =>
+  IO (ExitCode, String, String) ->
+  err ->
+  (String -> Either err a) ->
+  (String -> err) ->
+  m (Either err a)
+runCheckedCommand action unavailable handleSuccess handleFailure = do
+  result <-
+    liftIO
+      (try action :: IO (Either SomeException (ExitCode, String, String)))
+  pure $
+    case result of
+      Left _ ->
+        Left unavailable
+      Right (exitCode, stdoutText, stderrText) ->
+        case exitCode of
+          ExitSuccess -> handleSuccess stdoutText
+          ExitFailure _ -> Left (handleFailure stderrText)
+
+runCheckedByteCommand ::
+  MonadIO m =>
+  IO (ExitCode, BS.ByteString, BS.ByteString) ->
+  err ->
+  (BS.ByteString -> Either err a) ->
+  (BS.ByteString -> err) ->
+  m (Either err a)
+runCheckedByteCommand action unavailable handleSuccess handleFailure = do
+  result <-
+    liftIO
+      (try action :: IO (Either SomeException (ExitCode, BS.ByteString, BS.ByteString)))
+  pure $
+    case result of
+      Left _ ->
+        Left unavailable
+      Right (exitCode, stdoutBytes, stderrBytes) ->
+        case exitCode of
+          ExitSuccess -> handleSuccess stdoutBytes
+          ExitFailure _ -> Left (handleFailure stderrBytes)
+
+sanitizeCommandFailure :: String -> Text
+sanitizeCommandFailure stderrText =
+  let trimmed = T.strip (T.pack stderrText)
+   in if T.null trimmed then "bw config server failed" else trimmed
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
