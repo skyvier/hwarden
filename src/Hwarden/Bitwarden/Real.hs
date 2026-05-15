@@ -66,7 +66,7 @@ instance
     logInfo "running bw list items"
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["list", "items"]
     handleCheckedByteCommand
-      (readProcessBytes command)
+      (runProcessBytes command)
       ListItemsUnavailable
       ( \stdoutBytes -> do
           bwItems <-
@@ -120,6 +120,21 @@ isolatedBwEnv = do
 runCommand :: CreateProcess -> IO (ExitCode, String, String)
 runCommand command = readCreateProcessWithExitCode command ""
 
+runProcessBytes :: CreateProcess -> IO (ExitCode, BS.ByteString, BS.ByteString)
+runProcessBytes command = do
+  (Nothing, Just stdoutHandle, Just stderrHandle, processHandle) <-
+    createProcess
+      command
+        { std_out = CreatePipe,
+          std_err = CreatePipe
+        }
+  stdoutBytes <- BS.hGetContents stdoutHandle
+  stderrBytes <- BS.hGetContents stderrHandle
+  exitCode <- waitForProcess processHandle
+  hClose stdoutHandle
+  hClose stderrHandle
+  pure (exitCode, stdoutBytes, stderrBytes)
+
 handleCheckedCommand ::
   MonadIO m =>
   IO (ExitCode, String, String) ->
@@ -167,18 +182,3 @@ sanitizeCommandFailure stderrText =
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
-
-readProcessBytes :: CreateProcess -> IO (ExitCode, BS.ByteString, BS.ByteString)
-readProcessBytes command = do
-  (Nothing, Just stdoutHandle, Just stderrHandle, processHandle) <-
-    createProcess
-      command
-        { std_out = CreatePipe,
-          std_err = CreatePipe
-        }
-  stdoutBytes <- BS.hGetContents stdoutHandle
-  stderrBytes <- BS.hGetContents stderrHandle
-  exitCode <- waitForProcess processHandle
-  hClose stdoutHandle
-  hClose stderrHandle
-  pure (exitCode, stdoutBytes, stderrBytes)
