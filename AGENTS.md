@@ -5,7 +5,7 @@
 ## Scope
 
 - Preserve the single-purpose design.
-- Prefer small, direct changes in `app/Main.hs`.
+- Prefer small, direct changes 
 - Do not add persistence for session data, passwords, or other secrets.
 - Keep the interface local-only over the Unix socket at `$XDG_RUNTIME_DIR/hwarden/agent.sock`.
 
