@@ -100,6 +100,10 @@ integrationTests =
               { agentServerUrlOverride = Just "https://vault.example.test"
               }
         cleanupAgent agent
+    -- This is a pragmatic race-based check, not a proof: we poll for process
+    -- exit and socket creation, so the result still depends on scheduling.
+    -- The goal is to catch regressions in the expected startup ordering without
+    -- adding a more complex synchronization protocol to the fake `bw` script.
     , testCase "agent startup fails before creating the socket if bw config server fails" $ do
         agent <-
           spawnConfiguredAgent
