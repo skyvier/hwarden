@@ -9,6 +9,7 @@ library
       Hwarden.Agent
     , Hwarden.Bitwarden
     , Hwarden.Logging
+    , Hwarden.Runtime
     , Hwarden.Socket
     , Hwarden.Types
   other-modules:

@@ -18,6 +18,7 @@ import Hwarden.Bitwarden.Real
   ( HasBitwardenCliConfig (..),
     RealBitwardenT (..)
   )
+import qualified Hwarden.Runtime as Runtime
 import Katip
   ( ColorStrategy (ColorIfTerminal),
     Katip,
@@ -40,7 +41,6 @@ import Katip
     registerScribe
   )
 import System.Environment (lookupEnv)
-import System.FilePath ((</>))
 import System.IO (stdout)
 import UnliftIO (MonadUnliftIO)
 
@@ -84,7 +84,8 @@ runAgentT env =
 
 initAgentEnv :: FilePath -> IO Env
 initAgentEnv runtimeDir = do
-  let isolatedBitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
+  let isolatedBitwardenCliAppDataDir =
+        Runtime.bitwardenCliAppDataDir (Runtime.deriveAgentPaths runtimeDir)
   serverUrl <- lookupEnv "HWARDEN_SERVER_URL"
   logEnv <- initAgentLogEnv
   return $

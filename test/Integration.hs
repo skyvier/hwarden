@@ -9,6 +9,7 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import qualified Hwarden.Agent as Agent
 import Hwarden.Bitwarden (determineBitwardenServerUrl)
+import qualified Hwarden.Runtime as Runtime
 import Hwarden.Socket (recvAll)
 import qualified Data.Text as T
 import Network.Socket
@@ -43,6 +44,7 @@ import System.Process
     ProcessHandle,
     StdStream (Inherit),
     createProcess,
+    getProcessExitCode,
     proc,
     terminateProcess,
     waitForProcess
@@ -99,32 +101,17 @@ integrationTests =
               }
         cleanupAgent agent
     , testCase "agent startup fails before creating the socket if bw config server fails" $ do
-        let runtimeDir = "runtime"
-            fakeBinDir = "bin"
-            agentSocketPath = runtimeDir </> "hwarden" </> "agent.sock"
-        tmpDir <- createTempDir "hwarden-agent-test"
-        createDirectoryIfMissing True (tmpDir </> runtimeDir)
-        createDirectoryIfMissing True (tmpDir </> fakeBinDir)
-        let expectedBitwardenCliAppDataDir = tmpDir </> runtimeDir </> "hwarden" </> "bitwarden-cli"
-        writeFakeBw
-          (tmpDir </> fakeBinDir)
-          expectedBitwardenCliAppDataDir
-          (T.unpack (determineBitwardenServerUrl Nothing))
-          defaultFailingBw {configServerBehavior = CommandFails "config failed"}
-        hwardenAgent <- requireExecutable "hwarden-agent"
-        bwReal <- requireExecutable "bw"
-        baseEnv <- getEnvironment
-        let pathValue = (tmpDir </> fakeBinDir) <> ":" <> takeDirectory bwReal
-            agentEnv =
-              setEnvVar "PATH" pathValue
-                (setEnvVar "XDG_RUNTIME_DIR" (tmpDir </> runtimeDir) baseEnv)
-        handle <- spawnAgent hwardenAgent tmpDir agentEnv
-        threadDelay 200000
-        exitCode <- waitForProcess handle
-        socketExists <- doesFileExist (tmpDir </> agentSocketPath)
-        removeDirectoryRecursive tmpDir
-        assertBool "expected startup failure before socket creation" (exitCode /= ExitSuccess)
-        assertBool "socket should not be created when server bootstrap fails" (not socketExists)
+        agent <-
+          spawnConfiguredAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw {configServerBehavior = CommandFails "config failed"}
+              }
+        exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
+        exitCode <- waitForProcess (processHandle agent)
+        removeDirectoryRecursive (tempRoot agent)
+        assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
+        assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
 
     , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ do
         agent <- setupAgent defaultAgentConfig
@@ -210,40 +197,9 @@ integrationTests =
 
 setupAgent :: AgentConfig -> IO AgentResource
 setupAgent agentConfig = do
-  tmpDir <- createTempDir "hwarden-agent-test"
-  let runtimeDir = tmpDir </> "runtime"
-      fakeBinDir = tmpDir </> "bin"
-      agentSocketPath = runtimeDir </> "hwarden" </> "agent.sock"
-      expectedBitwardenCliAppDataDir = runtimeDir </> "hwarden" </> "bitwarden-cli"
-      serverUrl = determineBitwardenServerUrl (agentServerUrlOverride agentConfig)
-  createDirectoryIfMissing True runtimeDir
-  createDirectoryIfMissing True fakeBinDir
-  writeFakeBw
-    fakeBinDir
-    expectedBitwardenCliAppDataDir
-    (T.unpack serverUrl)
-    (agentBwBehavior agentConfig)
-  hwardenAgent <- requireExecutable "hwarden-agent"
-  bwReal <- requireExecutable "bw"
-  baseEnv <- getEnvironment
-  let pathValue = fakeBinDir <> ":" <> takeDirectory bwReal
-      applyServerUrlOverride =
-        maybe id
-          (setEnvVar "HWARDEN_SERVER_URL")
-          (agentServerUrlOverride agentConfig)
-      agentBaseEnv =
-        setEnvVar "PATH" pathValue
-          (setEnvVar "XDG_RUNTIME_DIR" runtimeDir baseEnv)
-      agentEnv = applyServerUrlOverride agentBaseEnv
-
-  handle <- spawnAgent hwardenAgent tmpDir agentEnv
-  waitForSocket agentSocketPath
-  pure
-    AgentResource
-      { socketPath = agentSocketPath,
-        processHandle = handle,
-        tempRoot = tmpDir
-      }
+  agent <- spawnConfiguredAgent agentConfig
+  waitForSocketReady (socketPath agent)
+  pure agent
 
 cleanupAgent :: AgentResource -> IO ()
 cleanupAgent agent = do
@@ -263,8 +219,41 @@ spawnAgent hwardenAgent workDir agentEnv = do
         }
   pure handle
 
-waitForSocket :: FilePath -> IO ()
-waitForSocket agentSocketPath = go (200 :: Int)
+spawnConfiguredAgent :: AgentConfig -> IO AgentResource
+spawnConfiguredAgent agentConfig = do
+  tmpDir <- createTempDir "hwarden-agent-test"
+  let paths = Runtime.deriveAgentPaths (tmpDir </> "runtime")
+      fakeBinDir = tmpDir </> "bin"
+      serverUrl = determineBitwardenServerUrl (agentServerUrlOverride agentConfig)
+  createDirectoryIfMissing True (Runtime.runtimeDir paths)
+  createDirectoryIfMissing True fakeBinDir
+  writeFakeBw
+    fakeBinDir
+    (Runtime.bitwardenCliAppDataDir paths)
+    (T.unpack serverUrl)
+    (agentBwBehavior agentConfig)
+  hwardenAgent <- requireExecutable "hwarden-agent"
+  bwReal <- requireExecutable "bw"
+  baseEnv <- getEnvironment
+  let pathValue = fakeBinDir <> ":" <> takeDirectory bwReal
+      applyServerUrlOverride =
+        maybe id
+          (setEnvVar "HWARDEN_SERVER_URL")
+          (agentServerUrlOverride agentConfig)
+      agentBaseEnv =
+        setEnvVar "PATH" pathValue
+          (setEnvVar "XDG_RUNTIME_DIR" (Runtime.runtimeDir paths) baseEnv)
+      agentEnv = applyServerUrlOverride agentBaseEnv
+  handle <- spawnAgent hwardenAgent tmpDir agentEnv
+  pure
+    AgentResource
+      { socketPath = Runtime.socketPath paths,
+        processHandle = handle,
+        tempRoot = tmpDir
+      }
+
+waitForSocketReady :: FilePath -> IO ()
+waitForSocketReady agentSocketPath = go (200 :: Int)
   where
     go 0 = fail ("socket was not created: " <> agentSocketPath)
     go retries = do
@@ -272,6 +261,20 @@ waitForSocket agentSocketPath = go (200 :: Int)
       if exists
         then pure ()
         else threadDelay 50000 >> go (retries - 1)
+
+waitForProcessExitBeforeSocketReady :: AgentResource -> IO Bool
+waitForProcessExitBeforeSocketReady agent = go (200 :: Int)
+  where
+    go 0 = pure False
+    go retries = do
+      exists <- doesFileExist (socketPath agent)
+      if exists
+        then pure False
+        else do
+          exitCode <- getProcessExitCode (processHandle agent)
+          case exitCode of
+            Just _ -> pure True
+            Nothing -> threadDelay 50000 >> go (retries - 1)
 
 sendRequest :: FilePath -> Agent.Request -> IO Agent.Response
 sendRequest agentSocketPath request =
