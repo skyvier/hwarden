@@ -46,6 +46,7 @@ import qualified Data.Text as T
 import Hwarden.Bitwarden (Bitwarden (listItems, unlock), ListItemsError (..), UnlockError (..))
 import Hwarden.Bitwarden.Real (configureServer)
 import Hwarden.Logging (logInfo)
+import qualified Hwarden.Runtime as Runtime
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), Password (..), SessionKey (..), Username (..))
 import Hwarden.App (AgentT, runAgentT, Env(..), initAgentEnv)
@@ -78,7 +79,6 @@ import System.Directory
   )
 import System.Environment (lookupEnv)
 import System.Exit (die)
-import System.FilePath ((</>))
 import System.Posix.Files (ownerModes, setFileMode)
 import Test.QuickCheck (Arbitrary (arbitrary))
 import qualified Data.UUID as UUID
@@ -166,25 +166,23 @@ runAgent :: IO ()
 runAgent = do
   runtimeDir <- requireRuntimeDir
   env <- initAgentEnv runtimeDir
-  let socketDir = runtimeDir </> "hwarden"
-      socketPath = socketDir </> "agent.sock"
-      bitwardenCliAppDataDir = envBitwardenCliAppDataDir env
+  let paths = Runtime.deriveAgentPaths runtimeDir
 
-  prepareRuntimeDir socketDir
-  prepareRuntimeDir bitwardenCliAppDataDir
-  removeExistingSocket socketPath
+  prepareRuntimeDir (Runtime.socketDir paths)
+  prepareRuntimeDir (Runtime.bitwardenCliAppDataDir paths)
+  removeExistingSocket (Runtime.socketPath paths)
   bootstrapBitwardenCli env
 
   agentStateVar <- newMVar Locked
   sock <- socket AF_UNIX Stream defaultProtocol
   finally
     (do
-        bind sock (SockAddrUnix socketPath)
+        bind sock (SockAddrUnix (Runtime.socketPath paths))
         listen sock maxListenQueue
         forever $ do
           (conn, _) <- accept sock
           handleConnection env agentStateVar conn)
-    (close sock `finally` (cleanupSocket socketPath `finally` closeScribes (envLogEnv env)))
+    (close sock `finally` (cleanupSocket (Runtime.socketPath paths) `finally` closeScribes (envLogEnv env)))
 
 requireRuntimeDir :: IO FilePath
 requireRuntimeDir = do
