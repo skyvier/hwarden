@@ -101,6 +101,31 @@ If the agent is still locked:
 {"ok":false,"error":"locked"}
 ```
 
+Fetch the password for a specific login item by id after unlocking:
+
+```sh
+printf '{"cmd":"get-password","id":"1"}' \
+  | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
+```
+
+Expected success:
+
+```json
+{"ok":true,"id":"1","password":"super-secret"}
+```
+
+If the agent is still locked:
+
+```json
+{"ok":false,"error":"locked"}
+```
+
+If Bitwarden cannot return a usable password for that item:
+
+```json
+{"ok":false,"error":"..."}
+```
+
 Unknown command:
 
 ```sh
