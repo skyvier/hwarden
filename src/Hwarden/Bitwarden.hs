@@ -2,6 +2,7 @@
 
 module Hwarden.Bitwarden
   ( Bitwarden (..),
+    GetPasswordError (..),
     ListItemsError (..),
     UnlockError (..),
     BwItem (..),
@@ -19,6 +20,7 @@ import qualified Data.Text as T
 import Hwarden.Types
   ( ItemSummary (ItemSummary),
     Password,
+    PasswordValue,
     SessionKey,
     Username
   )
@@ -32,6 +34,11 @@ data UnlockError
 data ListItemsError
   = ListItemsUnavailable
   | ListItemsFailed Text
+  deriving (Eq, Show)
+
+data GetPasswordError
+  = GetPasswordUnavailable
+  | GetPasswordFailed Text
   deriving (Eq, Show)
 
 instance Arbitrary UnlockError where
@@ -48,9 +55,17 @@ instance Arbitrary ListItemsError where
         ListItemsFailed . T.pack <$> arbitrary
       ]
 
+instance Arbitrary GetPasswordError where
+  arbitrary =
+    oneof
+      [ pure GetPasswordUnavailable,
+        GetPasswordFailed . T.pack <$> arbitrary
+      ]
+
 class Monad m => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
+  getPassword :: SessionKey -> Text -> m (Either GetPasswordError PasswordValue)
 
 defaultBitwardenServerUrl :: Text
 defaultBitwardenServerUrl = "https://vault.bitwarden.eu"

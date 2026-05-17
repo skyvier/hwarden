@@ -59,7 +59,8 @@ data CommandBehavior
 data BwBehavior = BwBehavior
   { configServerBehavior :: CommandBehavior,
     unlockBehavior :: CommandBehavior,
-    listItemsBehavior :: CommandBehavior
+    listItemsBehavior :: CommandBehavior,
+    getPasswordBehavior :: CommandBehavior
   }
 
 data AgentConfig = AgentConfig
@@ -125,6 +126,14 @@ integrationTests =
           "expected locked list-items response"
           (Agent.Failure "locked")
           response
+    , testCase "sending a get-password request via the socket to a fresh agent process results in a locked failure" $ do
+        agent <- setupAgent defaultAgentConfig
+        response <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        cleanupAgent agent
+        assertEqual
+          "expected locked get-password response"
+          (Agent.Failure "locked")
+          response
     , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $ do
         agent <-
           setupAgent
@@ -149,7 +158,8 @@ integrationTests =
                   BwBehavior
                     { configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
-                      listItemsBehavior = CommandSucceeds listItemsPayload
+                      listItemsBehavior = CommandSucceeds listItemsPayload,
+                      getPasswordBehavior = CommandFails "bw get password failed"
                     }
               }
         unlockResponse <-
@@ -163,6 +173,75 @@ integrationTests =
           "expected listed login items"
           (Agent.ItemList listItemsSummary)
           itemsResponse
+    , testCase "sending unlock then get-password via the socket returns item id and password" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehavior = CommandFails "bw list items failed",
+                      getPasswordBehavior = CommandSucceeds "super-secret"
+                    }
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual
+          "expected password result"
+          (Agent.PasswordResult "item-123" (Agent.PasswordValue "super-secret"))
+          passwordResponse
+    , testCase "sending unlock then get-password via the socket returns failure when bw get password fails" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehavior = CommandFails "bw list items failed",
+                      getPasswordBehavior = CommandFails "item lookup failed"
+                    }
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual
+          "expected get-password failure response"
+          (Agent.Failure "item lookup failed")
+          passwordResponse
+    , testCase "sending unlock then get-password via the socket returns failure when bw get password returns an empty password" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehavior = CommandFails "bw list items failed",
+                      getPasswordBehavior = CommandSucceeds ""
+                    }
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual
+          "expected empty password failure response"
+          (Agent.Failure "password was empty")
+          passwordResponse
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
         agent <- setupAgent defaultAgentConfig
         initialStatus <- sendRequest (socketPath agent) Agent.Status
@@ -344,6 +423,18 @@ scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
       "      exit 1",
       "    fi",
       "    ;;",
+      "  get)",
+      "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/configured\" ]; then",
+      "      printf '%s\\n' 'server was not configured before get' 1>&2",
+      "      exit 1",
+      "    fi",
+      "    if [ \"$2\" = \"password\" ]; then",
+      emitBehavior "      " (getPasswordBehavior bwBehavior),
+      "    else",
+      "      printf '%s\\n' 'unsupported get command' 1>&2",
+      "      exit 1",
+      "    fi",
+      "    ;;",
       "  *)",
       "    printf '%s\\n' 'unsupported bw command' 1>&2",
       "    exit 1",
@@ -390,7 +481,8 @@ defaultFailingBw =
   BwBehavior
     { configServerBehavior = CommandSucceeds "",
       unlockBehavior = CommandFails "credentials were incorrect",
-      listItemsBehavior = CommandFails "bw list items failed"
+      listItemsBehavior = CommandFails "bw list items failed",
+      getPasswordBehavior = CommandFails "bw get password failed"
     }
 
 defaultAgentConfig :: AgentConfig

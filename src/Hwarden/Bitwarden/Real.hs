@@ -19,12 +19,18 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Bitwarden
   ( Bitwarden (..),
+    GetPasswordError (..),
     ListItemsError (..),
     UnlockError (..),
     extractLoginItems
   )
 import Hwarden.Logging (logInfo)
-import Hwarden.Types (Password (Password), SessionKey (SessionKey), Username (Username))
+import Hwarden.Types
+  ( Password (Password),
+    PasswordValue (PasswordValue),
+    SessionKey (SessionKey),
+    Username (Username)
+  )
 import Katip (Katip, KatipContext, katipAddContext, sl)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -75,6 +81,15 @@ instance
           pure (extractLoginItems bwItems)
       )
       (ListItemsFailed . T.pack . BS8.unpack)
+
+  getPassword (SessionKey rawSessionKey) itemId = RealBitwardenT $ do
+    logInfo "running bw get password"
+    command <- authenticatedBwProcess (SessionKey rawSessionKey) ["get", "password", T.unpack itemId]
+    handleCheckedCommand
+      (runCommand command)
+      GetPasswordUnavailable
+      parsePasswordValue
+      (GetPasswordFailed . T.pack)
 
 configureServer ::
   (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
@@ -179,6 +194,13 @@ sanitizeCommandFailure :: String -> Text
 sanitizeCommandFailure stderrText =
   let trimmed = T.strip (T.pack stderrText)
    in if T.null trimmed then "bw config server failed" else trimmed
+
+parsePasswordValue :: String -> Either GetPasswordError PasswordValue
+parsePasswordValue stdoutText =
+  let trimmed = T.strip (T.pack stdoutText)
+   in if T.null trimmed
+        then Left (GetPasswordFailed "password was empty")
+        else Right (PasswordValue trimmed)
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
