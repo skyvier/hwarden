@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Hwarden.Types
-  ( ItemSummary (..),
+  ( LoginItemId (..),
+    ItemSummary (..),
     Password (..),
     PasswordValue (..),
     SessionKey (..),
@@ -13,6 +14,12 @@ import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), object, withObject, (.
 import Data.Text (Text)
 import qualified Data.Text as T
 import Test.QuickCheck (Arbitrary (arbitrary))
+
+newtype LoginItemId = LoginItemId Text
+  deriving (Eq, Show)
+
+instance Arbitrary LoginItemId where
+  arbitrary = LoginItemId . T.pack <$> arbitrary
 
 data ItemSummary = ItemSummary
   { itemId :: Text,

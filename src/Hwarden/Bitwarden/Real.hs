@@ -26,7 +26,8 @@ import Hwarden.Bitwarden
   )
 import Hwarden.Logging (logInfo)
 import Hwarden.Types
-  ( Password (Password),
+  ( LoginItemId (LoginItemId),
+    Password (Password),
     PasswordValue (PasswordValue),
     SessionKey (SessionKey),
     Username (Username)
@@ -82,7 +83,7 @@ instance
       )
       (ListItemsFailed . T.pack . BS8.unpack)
 
-  getPassword (SessionKey rawSessionKey) itemId = RealBitwardenT $ do
+  getPassword (SessionKey rawSessionKey) (LoginItemId itemId) = RealBitwardenT $ do
     logInfo "running bw get password"
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["get", "password", T.unpack itemId]
     handleCheckedCommand

@@ -128,7 +128,7 @@ integrationTests =
           response
     , testCase "sending a get-password request via the socket to a fresh agent process results in a locked failure" $ do
         agent <- setupAgent defaultAgentConfig
-        response <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        response <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
         cleanupAgent agent
         assertEqual
           "expected locked get-password response"
@@ -189,12 +189,12 @@ integrationTests =
           sendRequest
             (socketPath agent)
             (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
         cleanupAgent agent
         assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
         assertEqual
           "expected password result"
-          (Agent.PasswordResult "item-123" (Agent.PasswordValue "super-secret"))
+          (Agent.PasswordResult (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
           passwordResponse
     , testCase "sending unlock then get-password via the socket returns failure when bw get password fails" $ do
         agent <-
@@ -212,7 +212,7 @@ integrationTests =
           sendRequest
             (socketPath agent)
             (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
         cleanupAgent agent
         assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
         assertEqual
@@ -235,7 +235,7 @@ integrationTests =
           sendRequest
             (socketPath agent)
             (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest "item-123")
+        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
         cleanupAgent agent
         assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
         assertEqual

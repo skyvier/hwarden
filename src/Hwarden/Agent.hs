@@ -7,6 +7,7 @@ module Hwarden.Agent
     GetPasswordError (..),
     ItemSummary (..),
     ListItemsError (..),
+    LoginItemId (..),
     Password (..),
     PasswordValue (..),
     Request (..),
@@ -56,7 +57,7 @@ import Hwarden.Bitwarden.Real (configureServer)
 import Hwarden.Logging (logInfo)
 import qualified Hwarden.Runtime as Runtime
 import Hwarden.Socket (recvAll)
-import Hwarden.Types (ItemSummary (..), Password (..), PasswordValue (..), SessionKey (..), Username (..))
+import Hwarden.Types (ItemSummary (..), LoginItemId (..), Password (..), PasswordValue (..), SessionKey (..), Username (..))
 import Hwarden.App (AgentT, runAgentT, Env(..), initAgentEnv)
 import Katip
   ( KatipContext,
@@ -96,21 +97,21 @@ data Request
   = UnlockRequest Username Password
   | Status
   | ListItems
-  | GetPasswordRequest Text
+  | GetPasswordRequest LoginItemId
   | UnknownRequest
   deriving (Eq, Show)
 
 data Response
   = Success Text
   | ItemList [ItemSummary]
-  | PasswordResult Text PasswordValue
+  | PasswordResult LoginItemId PasswordValue
   | Failure Text
   deriving (Eq)
 
 instance Show Response where
   show (Success message) = "Success " <> show message
   show (ItemList items) = "ItemList " <> show items
-  show (PasswordResult passwordItemId password) = "PasswordResult " <> show passwordItemId <> " " <> show password
+  show (PasswordResult loginItemId password) = "PasswordResult " <> show loginItemId <> " " <> show password
   show (Failure err) = "Failure " <> show err
 
 data AgentState
@@ -132,7 +133,7 @@ instance FromJSON Request where
       "unlock" -> UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
       "status" -> pure Status
       "list-items" -> pure ListItems
-      "get-password" -> GetPasswordRequest <$> obj .: "id"
+      "get-password" -> GetPasswordRequest . LoginItemId <$> obj .: "id"
       _ -> pure UnknownRequest
 
 instance ToJSON Request where
@@ -150,7 +151,7 @@ instance ToJSON Request where
     object
       [ "cmd" .= ("list-items" :: Text)
       ]
-  toJSON (GetPasswordRequest passwordItemId) =
+  toJSON (GetPasswordRequest (LoginItemId passwordItemId)) =
     object
       [ "cmd" .= ("get-password" :: Text),
         "id" .= passwordItemId
@@ -171,7 +172,7 @@ instance ToJSON Response where
       [ "ok" .= True,
         "items" .= items
       ]
-  toJSON (PasswordResult passwordItemId (PasswordValue password)) =
+  toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
     object
       [ "ok" .= True,
         "id" .= passwordItemId,
@@ -188,7 +189,7 @@ instance FromJSON Response where
     ok <- obj .: "ok"
     if ok
       then
-        (PasswordResult <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
+        (PasswordResult . LoginItemId <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
           <|> (ItemList <$> obj .: "items")
           <|> (Success <$> obj .: "message")
       else Failure <$> obj .: "error"
@@ -274,14 +275,14 @@ handleRequestWith request agentState =
       handleUnlock username password
     ListItemsAction sessionKey ->
       handleListItems sessionKey agentState
-    GetPasswordAction sessionKey passwordItemId ->
-      handleGetPassword sessionKey passwordItemId agentState
+    GetPasswordAction sessionKey loginItemId ->
+      handleGetPassword sessionKey loginItemId agentState
     Reply response -> pure (agentState, response)
 
 data Decision 
   = Unlock Username Password
   | ListItemsAction SessionKey
-  | GetPasswordAction SessionKey Text
+  | GetPasswordAction SessionKey LoginItemId
   | Reply Response
   deriving (Eq, Show)
 
@@ -298,10 +299,10 @@ decide ListItems agentState =
   case agentState of
     Locked -> Reply (Failure "locked")
     Unlocked sessionKey -> ListItemsAction sessionKey
-decide (GetPasswordRequest passwordItemId) agentState =
+decide (GetPasswordRequest loginItemId) agentState =
   case agentState of
     Locked -> Reply (Failure "locked")
-    Unlocked sessionKey -> GetPasswordAction sessionKey passwordItemId
+    Unlocked sessionKey -> GetPasswordAction sessionKey loginItemId
 decide UnknownRequest _ = Reply (Failure "unknown request")
 
 handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
@@ -328,9 +329,9 @@ handleListItems sessionKey agentState = do
             ItemList items
   pure (agentState, response)
 
-handleGetPassword :: Bitwarden m => SessionKey -> Text -> AgentState -> m (AgentState, Response)
-handleGetPassword sessionKey passwordItemId agentState = do
-  result <- getPassword sessionKey passwordItemId
+handleGetPassword :: Bitwarden m => SessionKey -> LoginItemId -> AgentState -> m (AgentState, Response)
+handleGetPassword sessionKey loginItemId agentState = do
+  result <- getPassword sessionKey loginItemId
   let response =
         case result of
           Left GetPasswordUnavailable ->
@@ -338,7 +339,7 @@ handleGetPassword sessionKey passwordItemId agentState = do
           Left (GetPasswordFailed err) ->
             Failure (sanitizeGetPasswordFailure sessionKey err)
           Right password ->
-            PasswordResult passwordItemId password
+            PasswordResult loginItemId password
   pure (agentState, response)
 
 sanitizeUnlockError :: Password -> Text -> Text
