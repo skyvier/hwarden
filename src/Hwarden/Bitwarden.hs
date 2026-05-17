@@ -19,6 +19,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Hwarden.Types
   ( ItemSummary (ItemSummary),
+    LoginItemId,
     Password,
     PasswordValue,
     SessionKey,
@@ -65,7 +66,7 @@ instance Arbitrary GetPasswordError where
 class Monad m => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
-  getPassword :: SessionKey -> Text -> m (Either GetPasswordError PasswordValue)
+  getPassword :: SessionKey -> LoginItemId -> m (Either GetPasswordError PasswordValue)
 
 defaultBitwardenServerUrl :: Text
 defaultBitwardenServerUrl = "https://vault.bitwarden.eu"
