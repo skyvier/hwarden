@@ -57,7 +57,8 @@ data CommandBehavior
   | CommandFails BS8.ByteString
 
 data BwBehavior = BwBehavior
-  { configServerBehavior :: CommandBehavior,
+  { logoutBehavior :: CommandBehavior,
+    configServerBehavior :: CommandBehavior,
     unlockBehavior :: CommandBehavior,
     listItemsBehavior :: CommandBehavior,
     getPasswordBehavior :: CommandBehavior
@@ -88,9 +89,9 @@ integrationTests =
           response
 
     -- setupAgent waits for the daemon to finish startup, and startup always
-    -- runs `bw config server` first. That means even tests that only create
-    -- and tear down the agent still exercise the fake `bw` script and verify
-    -- the isolated BITWARDENCLI_APPDATA_DIR/server bootstrap path.
+    -- runs `bw logout` before `bw config server`. That means even tests that
+    -- only create and tear down the agent still exercise the fake `bw` script
+    -- and verify the isolated BITWARDENCLI_APPDATA_DIR bootstrap path.
     , testCase "agent startup configures the default Bitwarden EU server in the isolated profile" $ do
         agent <- setupAgent defaultAgentConfig
         cleanupAgent agent
@@ -99,6 +100,16 @@ integrationTests =
           setupAgent
             defaultAgentConfig
               { agentServerUrlOverride = Just "https://vault.example.test"
+              }
+        cleanupAgent agent
+    , testCase "agent startup continues when bw logout fails before server configuration" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { logoutBehavior = CommandFails "logout failed"
+                    }
               }
         cleanupAgent agent
     -- This is a pragmatic race-based check, not a proof: we poll for process
@@ -111,6 +122,21 @@ integrationTests =
             defaultAgentConfig
               { agentBwBehavior =
                   defaultFailingBw {configServerBehavior = CommandFails "config failed"}
+              }
+        exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
+        exitCode <- waitForProcess (processHandle agent)
+        removeDirectoryRecursive (tempRoot agent)
+        assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
+        assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
+    , testCase "agent startup fails when bw config server fails after the logout attempt" $ do
+        agent <-
+          spawnConfiguredAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandFails "config failed"
+                    }
               }
         exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
         exitCode <- waitForProcess (processHandle agent)
@@ -156,7 +182,8 @@ integrationTests =
             defaultAgentConfig
               { agentBwBehavior =
                   BwBehavior
-                    { configServerBehavior = CommandSucceeds "",
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
                       listItemsBehavior = CommandSucceeds listItemsPayload,
                       getPasswordBehavior = CommandFails "bw get password failed"
@@ -179,7 +206,8 @@ integrationTests =
             defaultAgentConfig
               { agentBwBehavior =
                   BwBehavior
-                    { configServerBehavior = CommandSucceeds "",
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandSucceeds "super-secret"
@@ -202,7 +230,8 @@ integrationTests =
             defaultAgentConfig
               { agentBwBehavior =
                   BwBehavior
-                    { configServerBehavior = CommandSucceeds "",
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandFails "item lookup failed"
@@ -225,7 +254,8 @@ integrationTests =
             defaultAgentConfig
               { agentBwBehavior =
                   BwBehavior
-                    { configServerBehavior = CommandSucceeds "",
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandSucceeds ""
@@ -396,7 +426,14 @@ scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
       "  exit 1",
       "fi",
       "case \"$1\" in",
+      "  logout)",
+      emitLogoutBehavior "    " (logoutBehavior bwBehavior),
+      "    ;;",
       "  config)",
+      "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/logout-attempted\" ]; then",
+      "      printf '%s\\n' 'logout was not attempted before config' 1>&2",
+      "      exit 1",
+      "    fi",
       "    if [ \"$2\" = \"server\" ] && [ \"$3\" = \"" <> BS8.pack expectedServerUrl <> "\" ]; then",
       emitConfigBehavior "      " (configServerBehavior bwBehavior),
       "    else",
@@ -460,6 +497,23 @@ emitBehavior indent commandBehavior =
           indent <> "exit 1"
         ]
 
+emitLogoutBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
+emitLogoutBehavior indent commandBehavior =
+  case commandBehavior of
+    CommandSucceeds _ ->
+      BS8.unlines
+        [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/logout-attempted\"",
+          indent <> "exit 0"
+        ]
+    CommandFails errMessage ->
+      BS8.unlines
+        [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/logout-attempted\"",
+          indent <> "while IFS= read -r line; do printf '%s\\n' \"$line\" 1>&2; done <<'EOF'",
+          errMessage,
+          "EOF",
+          indent <> "exit 1"
+        ]
+
 emitConfigBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
 emitConfigBehavior indent commandBehavior =
   case commandBehavior of
@@ -479,7 +533,8 @@ emitConfigBehavior indent commandBehavior =
 defaultFailingBw :: BwBehavior
 defaultFailingBw =
   BwBehavior
-    { configServerBehavior = CommandSucceeds "",
+    { logoutBehavior = CommandSucceeds "",
+      configServerBehavior = CommandSucceeds "",
       unlockBehavior = CommandFails "credentials were incorrect",
       listItemsBehavior = CommandFails "bw list items failed",
       getPasswordBehavior = CommandFails "bw get password failed"
