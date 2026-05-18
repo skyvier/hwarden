@@ -96,6 +96,7 @@ configureServer ::
   (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
   m (Either Text ())
 configureServer = do
+  bestEffortLogout
   serverUrl <- asks bitwardenServerUrl
   logInfo "running bw config server"
   command <- isolatedBwProcess ["config", "server", T.unpack serverUrl]
@@ -104,6 +105,24 @@ configureServer = do
     "bw config server failed"
     (const (Right ()))
     sanitizeCommandFailure
+
+bestEffortLogout ::
+  (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  m ()
+bestEffortLogout = do
+  logInfo "running bw logout"
+  command <- isolatedBwProcess ["logout"]
+  result <-
+    handleCheckedCommand
+      (runCommand command)
+      "bw logout failed"
+      (const (Right ()))
+      sanitizeLogoutFailure
+  case result of
+    Left err ->
+      logInfo ("bw logout failed; continuing startup: " <> err)
+    Right () ->
+      pure ()
 
 isolatedBwProcess ::
   (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
@@ -195,6 +214,11 @@ sanitizeCommandFailure :: String -> Text
 sanitizeCommandFailure stderrText =
   let trimmed = T.strip (T.pack stderrText)
    in if T.null trimmed then "bw config server failed" else trimmed
+
+sanitizeLogoutFailure :: String -> Text
+sanitizeLogoutFailure stderrText =
+  let trimmed = T.strip (T.pack stderrText)
+   in if T.null trimmed then "bw logout failed" else trimmed
 
 parsePasswordValue :: String -> Either GetPasswordError PasswordValue
 parsePasswordValue stdoutText =
