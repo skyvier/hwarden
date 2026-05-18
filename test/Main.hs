@@ -311,10 +311,10 @@ propertyHandleRequestWithUnlockSuccess sessionKey =
         newState == Agent.Unlocked sessionKey
           && response == Agent.Success "unlocked"
 
-propertyDecideGetPasswordLocked :: String -> Property
-propertyDecideGetPasswordLocked itemId =
+propertyDecideGetPasswordLocked :: Agent.LoginItemId -> Property
+propertyDecideGetPasswordLocked loginItemId =
   property $
-    Agent.decide (Agent.GetPasswordRequest (Agent.LoginItemId (T.pack itemId))) Agent.Locked
+    Agent.decide (Agent.GetPasswordRequest loginItemId) Agent.Locked
       == Agent.Reply (Agent.Failure "locked")
 
 propertyDecideStatusUnlocked :: Agent.SessionKey -> Property
@@ -329,13 +329,11 @@ propertyDecideListItemsUnlocked sessionKey =
     Agent.decide Agent.ListItems (Agent.Unlocked sessionKey)
       == Agent.ListItemsAction sessionKey
 
-propertyDecideGetPasswordUnlocked :: Agent.SessionKey -> String -> Property
-propertyDecideGetPasswordUnlocked sessionKey itemId =
+propertyDecideGetPasswordUnlocked :: Agent.SessionKey -> Agent.LoginItemId -> Property
+propertyDecideGetPasswordUnlocked sessionKey loginItemId =
   property $
     Agent.decide (Agent.GetPasswordRequest loginItemId) (Agent.Unlocked sessionKey)
       == Agent.GetPasswordAction sessionKey loginItemId
-  where
-    loginItemId = Agent.LoginItemId (T.pack itemId)
 
 propertyHandleRequestWithStatusUnlocked :: Agent.SessionKey -> Property
 propertyHandleRequestWithStatusUnlocked sessionKey =
@@ -350,20 +348,19 @@ propertyHandleRequestWithStatusUnlocked sessionKey =
 
 propertyHandleRequestWithGetPasswordPreservesState ::
   Agent.AgentState ->
-  String ->
+  Agent.LoginItemId ->
   Either Bitwarden.GetPasswordError Agent.PasswordValue ->
   Property
-propertyHandleRequestWithGetPasswordPreservesState initialState itemId mockGetPasswordResult =
+propertyHandleRequestWithGetPasswordPreservesState initialState loginItemId mockGetPasswordResult =
   let (newState, _) =
         runMockBitwarden
           (MockEnv (Left Agent.UnlockUnavailable) (Right []) mockGetPasswordResult)
-          (Agent.handleRequestWith (Agent.GetPasswordRequest (Agent.LoginItemId (T.pack itemId))) initialState)
+          (Agent.handleRequestWith (Agent.GetPasswordRequest loginItemId) initialState)
    in property (newState == initialState)
 
-propertyHandleRequestWithGetPasswordLocked :: String -> Property
-propertyHandleRequestWithGetPasswordLocked itemId =
+propertyHandleRequestWithGetPasswordLocked :: Agent.LoginItemId -> Property
+propertyHandleRequestWithGetPasswordLocked loginItemId =
   let currentState = Agent.Locked
-      loginItemId = Agent.LoginItemId (T.pack itemId)
       (newState, response) =
         runMockBitwarden
           (MockEnv (Left Agent.UnlockUnavailable) (Right []) (Left Bitwarden.GetPasswordUnavailable))
@@ -372,10 +369,9 @@ propertyHandleRequestWithGetPasswordLocked itemId =
         newState == currentState
           && response == Agent.Failure "locked"
 
-propertyHandleRequestWithGetPasswordSuccess :: Agent.SessionKey -> String -> Agent.PasswordValue -> Property
-propertyHandleRequestWithGetPasswordSuccess sessionKey itemId passwordValue =
+propertyHandleRequestWithGetPasswordSuccess :: Agent.SessionKey -> Agent.LoginItemId -> Agent.PasswordValue -> Property
+propertyHandleRequestWithGetPasswordSuccess sessionKey loginItemId passwordValue =
   let currentState = Agent.Unlocked sessionKey
-      loginItemId = Agent.LoginItemId (T.pack itemId)
       (newState, response) =
         runMockBitwarden
           (MockEnv (Left Agent.UnlockUnavailable) (Right []) (Right passwordValue))
@@ -433,10 +429,10 @@ propertyHandleRequestWithListItemsDoesNotExposeSessionKey sessionKey items =
     Agent.SessionKey sessionText = sessionKey
 
 propertyHandleRequestWithGetPasswordFailureDoesNotExposeSessionKey ::
-  String ->
+  Agent.LoginItemId ->
   String ->
   Property
-propertyHandleRequestWithGetPasswordFailureDoesNotExposeSessionKey itemId suffix =
+propertyHandleRequestWithGetPasswordFailureDoesNotExposeSessionKey loginItemId suffix =
   let sessionText = "session-needle-" <> T.pack suffix <> "-end"
       sessionKey = Agent.SessionKey sessionText
       currentState = Agent.Unlocked sessionKey
@@ -444,7 +440,7 @@ propertyHandleRequestWithGetPasswordFailureDoesNotExposeSessionKey itemId suffix
       (newState, response) =
         runMockBitwarden
           (MockEnv (Left Agent.UnlockUnavailable) (Right []) (Left leakingError))
-          (Agent.handleRequestWith (Agent.GetPasswordRequest (Agent.LoginItemId (T.pack itemId))) currentState)
+          (Agent.handleRequestWith (Agent.GetPasswordRequest loginItemId) currentState)
    in property
         ( newState == currentState
             && isFailure response
@@ -452,15 +448,15 @@ propertyHandleRequestWithGetPasswordFailureDoesNotExposeSessionKey itemId suffix
             && encodedResponseContains "<redacted>" response
         )
 
-propertyPasswordResultShowDoesNotExposePassword :: String -> String -> Property
-propertyPasswordResultShowDoesNotExposePassword itemId passwordText =
+propertyPasswordResultShowDoesNotExposePassword :: Agent.LoginItemId -> String -> Property
+propertyPasswordResultShowDoesNotExposePassword loginItemId passwordText =
   not (null passwordText) ==>
     property
       ( let passwordNeedle =
               T.pack ("pw-needle-" <> passwordText <> "-end")
             response =
               Agent.PasswordResult
-                (Agent.LoginItemId (T.pack itemId))
+                loginItemId
                 (Agent.PasswordValue passwordNeedle)
             rendered = T.pack (show response)
          in rendered /= passwordNeedle
