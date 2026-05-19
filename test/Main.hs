@@ -86,9 +86,14 @@ parsingTests =
     [ testCase "request parser decodes unlock payload" $ do
         let payload =
               BS8.pack
-                "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
+                "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\",\"twoFactorCode\":\"249213\"}"
         Aeson.eitherDecodeStrict' payload
-          @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+          @?= Right
+            ( Agent.UnlockRequestData
+                (Agent.Username "me@example.com")
+                (Agent.Password "bad-password")
+                (Just (Agent.TwoFactorCode "249213"))
+            )
     , testCase "determineBitwardenServerUrl uses the EU default when unset" $
         Bitwarden.determineBitwardenServerUrl Nothing
           @?= Bitwarden.defaultBitwardenServerUrl
@@ -137,6 +142,14 @@ encodingTests =
     "encoding"
     [ testCase "success response encoding matches golden file" $
         assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
+    , testCase "unlock request encoding includes twoFactorCode when present" $
+        Aeson.encode
+          ( Agent.UnlockRequestData
+              (Agent.Username "me@example.com")
+              (Agent.Password "bad-password")
+              (Just (Agent.TwoFactorCode "249213"))
+          )
+          @?= "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\",\"twoFactorCode\":\"249213\"}"
     , testCase "failure response encoding matches golden file" $
         assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
     , testCase "item-list response encoding matches golden file" $
@@ -230,6 +243,8 @@ pureStateTransitionTests =
         , testCase "given any state, an unknown request replies with failure" $
             Agent.decide Agent.UnknownRequest Agent.Locked
               @?= Agent.Reply (Agent.Failure "unknown request")
+        , testProperty "given an unlock request, show never exposes the two-factor code" $
+            propertyUnlockRequestShowDoesNotExposeTwoFactorCode
         ]
     , testGroup
         "handleRequestWith"
@@ -495,6 +510,23 @@ propertyHandleUnlockSuccess sessionKey =
    in property $
         newState == Agent.Unlocked sessionKey
           && response == Agent.Success "unlocked"
+
+propertyUnlockRequestShowDoesNotExposeTwoFactorCode ::
+  String ->
+  String ->
+  String ->
+  Property
+propertyUnlockRequestShowDoesNotExposeTwoFactorCode usernameText passwordText suffix =
+  let username = Agent.Username (T.pack usernameText)
+      password = Agent.Password (T.pack passwordText)
+      rawCode = "otp-needle-" <> suffix <> "-end"
+      code = Agent.TwoFactorCode (T.pack rawCode)
+      request = Agent.UnlockRequestData username password (Just code)
+      rendered = T.pack (show request)
+   in property
+        ( not (T.pack rawCode `T.isInfixOf` rendered)
+            && not (T.pack rawCode `T.isInfixOf` T.pack (show code))
+        )
 
 expectedFailure :: Agent.UnlockError -> Agent.Response
 expectedFailure Agent.UnlockUnavailable = Agent.Failure "bw login failed"

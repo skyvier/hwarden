@@ -5,6 +5,7 @@ module Hwarden.Types
     ItemSummary (..),
     Password (..),
     PasswordValue (..),
+    TwoFactorCode (..),
     SessionKey (..),
     Username (..)
   )
@@ -67,5 +68,14 @@ newtype PasswordValue = PasswordValue Text
 instance Show PasswordValue where
   show _ = "[REDACTED]"
 
+newtype TwoFactorCode = TwoFactorCode Text
+  deriving (Eq)
+
+instance Show TwoFactorCode where
+  show _ = "[REDACTED]"
+
 instance Arbitrary PasswordValue where
   arbitrary = PasswordValue . T.pack <$> arbitrary
+
+instance Arbitrary TwoFactorCode where
+  arbitrary = TwoFactorCode . T.pack <$> arbitrary

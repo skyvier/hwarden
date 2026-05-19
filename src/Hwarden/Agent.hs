@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 module Hwarden.Agent
   ( Bitwarden (..),
@@ -13,8 +14,10 @@ module Hwarden.Agent
     Request (..),
     Response (..),
     SessionKey (..),
+    TwoFactorCode (..),
     UnlockError (..),
     Username (..),
+    pattern UnlockRequest,
     cleanupSocket,
     decide,
     handleGetPassword,
@@ -41,6 +44,7 @@ import Data.Aeson
     object,
     withObject,
     (.:),
+    (.:?),
     (.=)
   )
 import qualified Data.Aeson as Aeson
@@ -57,7 +61,7 @@ import Hwarden.Bitwarden.Real (configureServer)
 import Hwarden.Logging (logInfo)
 import qualified Hwarden.Runtime as Runtime
 import Hwarden.Socket (recvAll)
-import Hwarden.Types (ItemSummary (..), LoginItemId (..), Password (..), PasswordValue (..), SessionKey (..), Username (..))
+import Hwarden.Types (ItemSummary (..), LoginItemId (..), Password (..), PasswordValue (..), SessionKey (..), TwoFactorCode (..), Username (..))
 import Hwarden.App (AgentT, runAgentT, Env(..), initAgentEnv)
 import Katip
   ( KatipContext,
@@ -94,12 +98,32 @@ import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
 
 data Request
-  = UnlockRequest Username Password
+  = UnlockRequestData Username Password (Maybe TwoFactorCode)
   | Status
   | ListItems
   | GetPasswordRequest LoginItemId
   | UnknownRequest
-  deriving (Eq, Show)
+  deriving (Eq)
+
+pattern UnlockRequest :: Username -> Password -> Request
+pattern UnlockRequest username password <- UnlockRequestData username password Nothing where
+  UnlockRequest username password = UnlockRequestData username password Nothing
+{-# COMPLETE UnlockRequestData, Status, ListItems, GetPasswordRequest, UnknownRequest #-}
+
+instance Show Request where
+  show (UnlockRequestData username password maybeCode) =
+    "UnlockRequestData "
+      <> show username
+      <> " "
+      <> show password
+      <> " "
+      <> case maybeCode of
+        Nothing -> "Nothing"
+        Just code -> "Just " <> show code
+  show Status = "Status"
+  show ListItems = "ListItems"
+  show (GetPasswordRequest loginItemId) = "GetPasswordRequest " <> show loginItemId
+  show UnknownRequest = "UnknownRequest"
 
 data Response
   = Success Text
@@ -130,19 +154,25 @@ instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
     cmd <- obj .: "cmd"
     case (cmd :: Text) of
-      "unlock" -> UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
+      "unlock" ->
+        UnlockRequestData
+          <$> (Username <$> obj .: "email")
+          <*> (Password <$> obj .: "password")
+          <*> (fmap TwoFactorCode <$> obj .:? "twoFactorCode")
       "status" -> pure Status
       "list-items" -> pure ListItems
       "get-password" -> GetPasswordRequest . LoginItemId <$> obj .: "id"
       _ -> pure UnknownRequest
 
 instance ToJSON Request where
-  toJSON (UnlockRequest (Username email) (Password password)) =
+  toJSON (UnlockRequestData (Username email) (Password password) maybeCode) =
     object
-      [ "cmd" .= ("unlock" :: Text),
-        "email" .= email,
-        "password" .= password
-      ]
+      $
+        [ "cmd" .= ("unlock" :: Text),
+          "email" .= email,
+          "password" .= password
+        ]
+          <> maybe [] (\(TwoFactorCode code) -> ["twoFactorCode" .= code]) maybeCode
   toJSON Status =
     object
       [ "cmd" .= ("status" :: Text)
@@ -287,7 +317,7 @@ data Decision
   deriving (Eq, Show)
 
 decide :: Request -> AgentState -> Decision
-decide (UnlockRequest username password) agentState =
+decide (UnlockRequestData username password _) agentState =
   case agentState of
     Unlocked _ -> Reply (Success "already unlocked")
     Locked -> Unlock username password
