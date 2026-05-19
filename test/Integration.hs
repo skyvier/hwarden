@@ -56,10 +56,17 @@ data CommandBehavior
   = CommandSucceeds BS8.ByteString
   | CommandFails BS8.ByteString
 
+data LoginBehavior
+  = LoginCommandBehavior CommandBehavior
+  | EmailOtpRequired
+      { expectedTwoFactorCode :: BS8.ByteString,
+        otpSuccessOutput :: BS8.ByteString
+      }
+
 data BwBehavior = BwBehavior
   { logoutBehavior :: CommandBehavior,
     configServerBehavior :: CommandBehavior,
-    unlockBehavior :: CommandBehavior,
+    unlockBehavior :: LoginBehavior,
     listItemsBehavior :: CommandBehavior,
     getPasswordBehavior :: CommandBehavior
   }
@@ -164,7 +171,7 @@ integrationTests =
         agent <-
           setupAgent
             defaultAgentConfig
-              { agentBwBehavior = defaultFailingBw {unlockBehavior = CommandSucceeds "session-key-123"}
+              { agentBwBehavior = defaultFailingBw {unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123")}
               }
         initialStatus <- sendRequest (socketPath agent) Agent.Status
         unlockResponse <-
@@ -184,7 +191,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandSucceeds listItemsPayload,
                       getPasswordBehavior = CommandFails "bw get password failed"
                     }
@@ -208,7 +215,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandSucceeds "super-secret"
                     }
@@ -232,7 +239,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandFails "item lookup failed"
                     }
@@ -256,7 +263,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandSucceeds ""
                     }
@@ -272,6 +279,77 @@ integrationTests =
           "expected empty password failure response"
           (Agent.Failure "password was empty")
           passwordResponse
+    , testCase "sending unlock with twoFactorCode succeeds when bw requires email OTP" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { unlockBehavior =
+                        EmailOtpRequired
+                          { expectedTwoFactorCode = "249213",
+                            otpSuccessOutput = "session-key-otp"
+                          }
+                    }
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            ( Agent.UnlockRequestData
+                (Agent.Username "me@example.com")
+                (Agent.Password "good-password")
+                (Just (Agent.TwoFactorCode "249213"))
+            )
+        finalStatus <- sendRequest (socketPath agent) Agent.Status
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual "expected unlocked status after OTP unlock" (Agent.Success "unlocked") finalStatus
+    , testCase "sending unlock without twoFactorCode fails instead of hanging when bw requires email OTP" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { unlockBehavior =
+                        EmailOtpRequired
+                          { expectedTwoFactorCode = "249213",
+                            otpSuccessOutput = "session-key-otp"
+                          }
+                    }
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        finalStatus <- sendRequest (socketPath agent) Agent.Status
+        cleanupAgent agent
+        assertEqual "expected missing OTP failure response" (Agent.Failure "two-factor code required") unlockResponse
+        assertEqual "expected locked status after missing OTP failure" (Agent.Success "locked") finalStatus
+    , testCase "sending unlock with an invalid twoFactorCode fails normally" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { unlockBehavior =
+                        EmailOtpRequired
+                          { expectedTwoFactorCode = "249213",
+                            otpSuccessOutput = "session-key-otp"
+                          }
+                    }
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            ( Agent.UnlockRequestData
+                (Agent.Username "me@example.com")
+                (Agent.Password "good-password")
+                (Just (Agent.TwoFactorCode "000000"))
+            )
+        finalStatus <- sendRequest (socketPath agent) Agent.Status
+        cleanupAgent agent
+        assertEqual "expected invalid OTP failure response" (Agent.Failure "invalid two-factor code") unlockResponse
+        assertEqual "expected locked status after invalid OTP failure" (Agent.Success "locked") finalStatus
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
         agent <- setupAgent defaultAgentConfig
         initialStatus <- sendRequest (socketPath agent) Agent.Status
@@ -446,7 +524,7 @@ scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
       "      printf '%s\\n' 'server was not configured before login' 1>&2",
       "      exit 1",
       "    fi",
-      emitBehavior "    " (unlockBehavior bwBehavior),
+      emitLoginBehavior "    " (unlockBehavior bwBehavior),
       "    ;;",
       "  list)",
       "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/configured\" ]; then",
@@ -497,6 +575,46 @@ emitBehavior indent commandBehavior =
           indent <> "exit 1"
         ]
 
+emitLoginBehavior :: BS8.ByteString -> LoginBehavior -> BS8.ByteString
+emitLoginBehavior indent loginBehavior =
+  case loginBehavior of
+    LoginCommandBehavior commandBehavior ->
+      emitBehavior indent commandBehavior
+    EmailOtpRequired expectedCode successOutput ->
+      BS8.unlines
+        [ indent <> "code=''",
+          indent <> "method=''",
+          indent <> "while [ $# -gt 0 ]; do",
+          indent <> "  case \"$1\" in",
+          indent <> "    --method)",
+          indent <> "      shift",
+          indent <> "      method=\"$1\"",
+          indent <> "      ;;",
+          indent <> "    --code)",
+          indent <> "      shift",
+          indent <> "      code=\"$1\"",
+          indent <> "      ;;",
+          indent <> "  esac",
+          indent <> "  shift",
+          indent <> "done",
+          indent <> "if [ -z \"$code\" ]; then",
+          indent <> "  printf '%s\\n' 'two-factor code required' 1>&2",
+          indent <> "  exit 1",
+          indent <> "fi",
+          indent <> "if [ \"$method\" != '1' ]; then",
+          indent <> "  printf '%s\\n' 'unsupported two-factor method' 1>&2",
+          indent <> "  exit 1",
+          indent <> "fi",
+          indent <> "if [ \"$code\" != '" <> expectedCode <> "' ]; then",
+          indent <> "  printf '%s\\n' 'invalid two-factor code' 1>&2",
+          indent <> "  exit 1",
+          indent <> "fi",
+          indent <> "while IFS= read -r line; do printf '%s\\n' \"$line\"; done <<'EOF'",
+          successOutput,
+          "EOF",
+          indent <> "exit 0"
+        ]
+
 emitLogoutBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
 emitLogoutBehavior indent commandBehavior =
   case commandBehavior of
@@ -535,7 +653,7 @@ defaultFailingBw =
   BwBehavior
     { logoutBehavior = CommandSucceeds "",
       configServerBehavior = CommandSucceeds "",
-      unlockBehavior = CommandFails "credentials were incorrect",
+      unlockBehavior = LoginCommandBehavior (CommandFails "credentials were incorrect"),
       listItemsBehavior = CommandFails "bw list items failed",
       getPasswordBehavior = CommandFails "bw get password failed"
     }
