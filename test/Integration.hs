@@ -60,8 +60,13 @@ data LoginBehavior
   = LoginCommandBehavior CommandBehavior
   | EmailOtpRequired
       { expectedTwoFactorCode :: BS8.ByteString,
-        otpSuccessOutput :: BS8.ByteString
+        otpSuccessOutput :: BS8.ByteString,
+        otpMissingCodeBehavior :: MissingCodeBehavior
       }
+
+data MissingCodeBehavior
+  = MissingCodeFails
+  | MissingCodeHangs
 
 data BwBehavior = BwBehavior
   { logoutBehavior :: CommandBehavior,
@@ -73,7 +78,8 @@ data BwBehavior = BwBehavior
 
 data AgentConfig = AgentConfig
   { agentBwBehavior :: BwBehavior,
-    agentServerUrlOverride :: Maybe String
+    agentServerUrlOverride :: Maybe String,
+    agentLoginTimeoutMicrosOverride :: Maybe String
   }
 
 data AgentResource = AgentResource
@@ -288,7 +294,8 @@ integrationTests =
                     { unlockBehavior =
                         EmailOtpRequired
                           { expectedTwoFactorCode = "249213",
-                            otpSuccessOutput = "session-key-otp"
+                            otpSuccessOutput = "session-key-otp",
+                            otpMissingCodeBehavior = MissingCodeFails
                           }
                     }
               }
@@ -313,9 +320,11 @@ integrationTests =
                     { unlockBehavior =
                         EmailOtpRequired
                           { expectedTwoFactorCode = "249213",
-                            otpSuccessOutput = "session-key-otp"
+                            otpSuccessOutput = "session-key-otp",
+                            otpMissingCodeBehavior = MissingCodeHangs
                           }
-                    }
+                    },
+                agentLoginTimeoutMicrosOverride = Just "100000"
               }
         unlockResponse <-
           sendRequest
@@ -334,7 +343,8 @@ integrationTests =
                     { unlockBehavior =
                         EmailOtpRequired
                           { expectedTwoFactorCode = "249213",
-                            otpSuccessOutput = "session-key-otp"
+                            otpSuccessOutput = "session-key-otp",
+                            otpMissingCodeBehavior = MissingCodeFails
                           }
                     }
               }
@@ -431,10 +441,14 @@ spawnConfiguredAgent agentConfig = do
         maybe id
           (setEnvVar "HWARDEN_SERVER_URL")
           (agentServerUrlOverride agentConfig)
+      applyLoginTimeoutOverride =
+        maybe id
+          (setEnvVar "HWARDEN_BW_LOGIN_TIMEOUT_MICROS")
+          (agentLoginTimeoutMicrosOverride agentConfig)
       agentBaseEnv =
         setEnvVar "PATH" pathValue
           (setEnvVar "XDG_RUNTIME_DIR" (Runtime.runtimeDir paths) baseEnv)
-      agentEnv = applyServerUrlOverride agentBaseEnv
+      agentEnv = applyLoginTimeoutOverride (applyServerUrlOverride agentBaseEnv)
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   pure
     AgentResource
@@ -580,7 +594,7 @@ emitLoginBehavior indent loginBehavior =
   case loginBehavior of
     LoginCommandBehavior commandBehavior ->
       emitBehavior indent commandBehavior
-    EmailOtpRequired expectedCode successOutput ->
+    EmailOtpRequired expectedCode successOutput missingCodeBehavior ->
       BS8.unlines
         [ indent <> "code=''",
           indent <> "method=''",
@@ -598,8 +612,7 @@ emitLoginBehavior indent loginBehavior =
           indent <> "  shift",
           indent <> "done",
           indent <> "if [ -z \"$code\" ]; then",
-          indent <> "  printf '%s\\n' 'two-factor code required' 1>&2",
-          indent <> "  exit 1",
+          emitMissingCodeBehavior indent missingCodeBehavior,
           indent <> "fi",
           indent <> "if [ \"$method\" != '1' ]; then",
           indent <> "  printf '%s\\n' 'unsupported two-factor method' 1>&2",
@@ -613,6 +626,19 @@ emitLoginBehavior indent loginBehavior =
           successOutput,
           "EOF",
           indent <> "exit 0"
+        ]
+
+emitMissingCodeBehavior :: BS8.ByteString -> MissingCodeBehavior -> BS8.ByteString
+emitMissingCodeBehavior indent missingCodeBehavior =
+  case missingCodeBehavior of
+    MissingCodeFails ->
+      BS8.unlines
+        [ indent <> "  printf '%s\\n' 'two-factor code required' 1>&2",
+          indent <> "  exit 1"
+        ]
+    MissingCodeHangs ->
+      BS8.unlines
+        [ indent <> "  while :; do :; done"
         ]
 
 emitLogoutBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
@@ -662,7 +688,8 @@ defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
   AgentConfig
     { agentBwBehavior = defaultFailingBw,
-      agentServerUrlOverride = Nothing
+      agentServerUrlOverride = Nothing,
+      agentLoginTimeoutMicrosOverride = Nothing
     }
 
 listItemsPayload :: BS8.ByteString

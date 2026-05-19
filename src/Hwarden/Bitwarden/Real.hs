@@ -9,7 +9,7 @@ module Hwarden.Bitwarden.Real
   )
 where
 
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (SomeException, evaluate, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -42,14 +42,15 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.IO (Handle, hClose)
 import System.Process
   ( CreateProcess (env, std_err, std_in, std_out),
+    ProcessHandle,
     StdStream (CreatePipe),
     createProcess,
+    getProcessExitCode,
     proc,
     readCreateProcessWithExitCode,
     terminateProcess,
     waitForProcess
   )
-import System.Timeout (timeout)
 
 newtype RealBitwardenT r m a = RealBitwardenT
   { unrealBitwarden :: m a
@@ -170,6 +171,7 @@ runCommand command = readCreateProcessWithExitCode command ""
 
 runLoginCommand :: Maybe TwoFactorCode -> CreateProcess -> IO (Either UnlockError (ExitCode, String, String))
 runLoginCommand maybeCode command = do
+  timeoutMicros <- loginTimeoutMicros
   result <-
     ( try
         (do
@@ -185,18 +187,22 @@ runLoginCommand maybeCode command = do
           stderrVar <- newEmptyMVar
           _ <- forkIO (readHandleText stdoutHandle stdoutVar)
           _ <- forkIO (readHandleText stderrHandle stderrVar)
-          timeoutResult <- timeout unlockTimeoutMicros (waitForProcess processHandle)
-          case timeoutResult of
+          exitCode <- waitForExit timeoutMicros processHandle
+          case exitCode of
             Nothing -> do
               terminateProcess processHandle
-              _ <- waitForProcess processHandle
-              _ <- takeMVar stdoutVar
-              stderrText <- takeMVar stderrVar
-              pure (Left (unlockTimeoutFailure maybeCode stderrText))
-            Just exitCode -> do
+              terminated <- waitForExit timeoutMicros processHandle
+              case terminated of
+                Nothing ->
+                  pure (Left (unlockTimeoutFailure maybeCode ""))
+                Just terminatedExitCode -> do
+                  _ <- takeMVar stdoutVar
+                  stderrText <- takeMVar stderrVar
+                  pure (Right (terminatedExitCode, "", stderrText))
+            Just finishedExitCode -> do
               stdoutText <- takeMVar stdoutVar
               stderrText <- takeMVar stderrVar
-              pure (Right (exitCode, stdoutText, stderrText)))
+              pure (Right (finishedExitCode, stdoutText, stderrText)))
       ) ::
         IO (Either SomeException (Either UnlockError (ExitCode, String, String)))
   pure $
@@ -263,8 +269,19 @@ loginOtpArgs :: TwoFactorCode -> [String]
 loginOtpArgs (TwoFactorCode code) =
   ["--method", "1", "--code", T.unpack code]
 
-unlockTimeoutMicros :: Int
-unlockTimeoutMicros = 5 * 1000 * 1000
+loginTimeoutMicros :: IO Int
+loginTimeoutMicros = do
+  envVars <- getEnvironment
+  pure $
+    case lookup "HWARDEN_BW_LOGIN_TIMEOUT_MICROS" envVars >>= readMaybeInt of
+      Just micros -> micros
+      Nothing -> defaultLoginTimeoutMicros
+
+defaultLoginTimeoutMicros :: Int
+defaultLoginTimeoutMicros = 5 * 1000 * 1000
+
+pollIntervalMicros :: Int
+pollIntervalMicros = 50 * 1000
 
 readHandleText :: Handle -> MVar String -> IO ()
 readHandleText handle outputVar = do
@@ -272,6 +289,19 @@ readHandleText handle outputVar = do
   _ <- evaluate (BS.length bytes)
   hClose handle
   putMVar outputVar (BS8.unpack bytes)
+
+waitForExit :: Int -> ProcessHandle -> IO (Maybe ExitCode)
+waitForExit timeoutMicros processHandle = go timeoutMicros
+  where
+    go remainingMicros = do
+      exitCode <- getProcessExitCode processHandle
+      case exitCode of
+        Just code -> pure (Just code)
+        Nothing
+          | remainingMicros <= 0 -> pure Nothing
+          | otherwise -> do
+              threadDelay pollIntervalMicros
+              go (remainingMicros - pollIntervalMicros)
 
 unlockTimeoutFailure :: Maybe TwoFactorCode -> String -> UnlockError
 unlockTimeoutFailure maybeCode stderrText =
@@ -326,3 +356,9 @@ parsePasswordValue stdoutText =
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
+
+readMaybeInt :: String -> Maybe Int
+readMaybeInt value =
+  case reads value of
+    [(number, "")] -> Just number
+    _ -> Nothing

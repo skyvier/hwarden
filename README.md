@@ -44,6 +44,17 @@ printf '{"cmd":"unlock","email":"me@example.com","password":"MY_PASSWORD"}' \
   | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
 ```
 
+If Bitwarden requires an email two-factor code for this CLI client, include the
+optional `twoFactorCode` field:
+
+```sh
+printf '{"cmd":"unlock","email":"me@example.com","password":"MY_PASSWORD","twoFactorCode":"249213"}' \
+  | nc -N -U "$XDG_RUNTIME_DIR/hwarden/agent.sock"
+```
+
+`hwarden-agent` currently supports only Bitwarden email OTP for two-factor
+login. Other two-factor methods are not exposed through the agent interface yet.
+
 `-N` is important here: the agent reads until EOF before decoding the request and writing the response.
 
 Expected success:
@@ -56,6 +67,13 @@ Expected failure:
 
 ```json
 {"ok":false,"error":"..."}
+```
+
+If Bitwarden requires an email OTP and the request does not include
+`twoFactorCode`, the agent returns:
+
+```json
+{"ok":false,"error":"two-factor code required"}
 ```
 
 Check the current lock status:
