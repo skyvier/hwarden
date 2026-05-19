@@ -58,7 +58,7 @@ instance
   (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
   Bitwarden (RealBitwardenT r m)
   where
-  unlock (Username email) (Password password) = RealBitwardenT $ do
+  unlock (Username email) (Password password) _ = RealBitwardenT $ do
     katipAddContext (sl "email" email) $
       logInfo "running bw login"
     let args = [T.unpack email, T.unpack password, "--raw"]

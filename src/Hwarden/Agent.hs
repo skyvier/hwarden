@@ -301,8 +301,8 @@ handleRequest agentStateVar request =
 handleRequestWith :: Bitwarden m => Request -> AgentState -> m (AgentState, Response)
 handleRequestWith request agentState =
   case decide request agentState of
-    Unlock username password -> 
-      handleUnlock username password
+    Unlock username password maybeCode ->
+      handleUnlock username password maybeCode
     ListItemsAction sessionKey ->
       handleListItems sessionKey agentState
     GetPasswordAction sessionKey loginItemId ->
@@ -310,17 +310,17 @@ handleRequestWith request agentState =
     Reply response -> pure (agentState, response)
 
 data Decision 
-  = Unlock Username Password
+  = Unlock Username Password (Maybe TwoFactorCode)
   | ListItemsAction SessionKey
   | GetPasswordAction SessionKey LoginItemId
   | Reply Response
   deriving (Eq, Show)
 
 decide :: Request -> AgentState -> Decision
-decide (UnlockRequestData username password _) agentState =
+decide (UnlockRequestData username password maybeCode) agentState =
   case agentState of
     Unlocked _ -> Reply (Success "already unlocked")
-    Locked -> Unlock username password
+    Locked -> Unlock username password maybeCode
 decide Status agentState =
   case agentState of
     Locked -> Reply (Success "locked")
@@ -335,9 +335,9 @@ decide (GetPasswordRequest loginItemId) agentState =
     Unlocked sessionKey -> GetPasswordAction sessionKey loginItemId
 decide UnknownRequest _ = Reply (Failure "unknown request")
 
-handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
-handleUnlock email password = do
-  result <- unlock email password
+handleUnlock :: Bitwarden m => Username -> Password -> Maybe TwoFactorCode -> m (AgentState, Response)
+handleUnlock email password maybeCode = do
+  result <- unlock email password maybeCode
   case result of
     Left UnlockUnavailable ->
       pure (Locked, Failure "bw login failed")

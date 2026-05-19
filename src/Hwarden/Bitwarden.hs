@@ -23,6 +23,7 @@ import Hwarden.Types
     Password,
     PasswordValue,
     SessionKey,
+    TwoFactorCode,
     Username
   )
 import Test.QuickCheck (Arbitrary (arbitrary), oneof)
@@ -64,7 +65,7 @@ instance Arbitrary GetPasswordError where
       ]
 
 class Monad m => Bitwarden m where
-  unlock :: Username -> Password -> m (Either UnlockError SessionKey)
+  unlock :: Username -> Password -> Maybe TwoFactorCode -> m (Either UnlockError SessionKey)
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
   getPassword :: SessionKey -> LoginItemId -> m (Either GetPasswordError PasswordValue)
 

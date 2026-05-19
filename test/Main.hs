@@ -61,7 +61,7 @@ instance Monad MockBitwarden where
        in next mockEnv
 
 instance Bitwarden.Bitwarden MockBitwarden where
-  unlock _ _ = MockBitwarden unlockResult
+  unlock _ _ _ = MockBitwarden unlockResult
   listItems _ = MockBitwarden listItemsResult
   getPassword _ _ = MockBitwarden getPasswordResult
 
@@ -220,7 +220,7 @@ pureStateTransitionTests =
             Agent.decide
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
               Agent.Locked
-              @?= Agent.Unlock (Agent.Username "me@example.com") (Agent.Password "secret")
+              @?= Agent.Unlock (Agent.Username "me@example.com") (Agent.Password "secret") Nothing
         , testCase "given a locked state, a status request replies locked" $
             Agent.decide Agent.Status Agent.Locked
               @?= Agent.Reply (Agent.Success "locked")
@@ -234,6 +234,8 @@ pureStateTransitionTests =
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
               (Agent.Unlocked (Agent.SessionKey "session-key"))
               @?= Agent.Reply (Agent.Success "already unlocked")
+        , testProperty "given a locked state, an unlock request preserves the provided optional two-factor code" $
+            propertyDecideUnlockPreservesTwoFactorCode
         , testProperty "given an unlocked state, a status request replies unlocked" $
             propertyDecideStatusUnlocked
         , testProperty "given an unlocked state, a list-items request triggers item listing" $
@@ -483,7 +485,7 @@ propertyHandleUnlockFailure unlockError =
   let (newState, response) =
         runMockBitwarden
           (MockEnv (Left unlockError) (Right []) (Left Bitwarden.GetPasswordUnavailable))
-          (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
+          (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret") Nothing)
    in property $
         newState == Agent.Locked
           && response == expectedFailure unlockError
@@ -506,10 +508,20 @@ propertyHandleUnlockSuccess sessionKey =
   let (newState, response) =
         runMockBitwarden
           (MockEnv (Right sessionKey) (Right []) (Left Bitwarden.GetPasswordUnavailable))
-          (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
+          (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret") Nothing)
    in property $
         newState == Agent.Unlocked sessionKey
           && response == Agent.Success "unlocked"
+
+propertyDecideUnlockPreservesTwoFactorCode ::
+  Agent.Username ->
+  Agent.Password ->
+  Maybe Agent.TwoFactorCode ->
+  Property
+propertyDecideUnlockPreservesTwoFactorCode username password maybeCode =
+  property $
+    Agent.decide (Agent.UnlockRequestData username password maybeCode) Agent.Locked
+      == Agent.Unlock username password maybeCode
 
 propertyUnlockRequestShowDoesNotExposeTwoFactorCode ::
   String ->
