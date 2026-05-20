@@ -30,9 +30,7 @@ import System.Posix.Files
   )
 import Test.QuickCheck
   ( Arbitrary (arbitrary),
-    Gen,
     Property,
-    oneof,
     property,
     (==>)
   )
@@ -54,28 +52,6 @@ data MockEnv = MockEnv
 
 instance Arbitrary MockEnv where
   arbitrary = MockEnv <$> arbitrary <*> arbitrary <*> arbitrary <*> pure mockNow
-
-newtype TestRequest = TestRequest
-  { unwrapTestRequest :: Agent.Request
-  }
-  deriving (Show)
-
-instance Arbitrary TestRequest where
-  arbitrary =
-    TestRequest
-      <$> oneof
-        [ Agent.UnlockRequest <$> arbitraryUsername <*> arbitraryPassword,
-          pure Agent.Status,
-          pure Agent.ListItems,
-          Agent.GetPasswordRequest <$> arbitrary,
-          pure Agent.UnknownRequest
-        ]
-
-arbitraryUsername :: Gen Agent.Username
-arbitraryUsername = Agent.Username . T.pack <$> arbitrary
-
-arbitraryPassword :: Gen Agent.Password
-arbitraryPassword = Agent.Password . T.pack <$> arbitrary
 
 instance Functor MockBitwarden where
   fmap f (MockBitwarden run) = MockBitwarden (f . run)
@@ -626,13 +602,12 @@ propertyPasswordResultShowDoesNotExposePassword loginItemId passwordText =
       )
 
 propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop ::
-  TestRequest ->
+  Agent.Request ->
   Agent.AgentState ->
   MockEnv ->
   Property
-propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop testRequest initialState mockEnv =
-  let request = unwrapTestRequest testRequest
-      (newState, _, effects) =
+propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop request initialState mockEnv =
+  let (newState, _, effects) =
         runMockBitwarden mockEnv (Agent.handleRequestWith request initialState)
    in property $
         case effects of

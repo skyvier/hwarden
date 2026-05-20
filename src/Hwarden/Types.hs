@@ -60,11 +60,17 @@ instance Arbitrary SessionKey where
 newtype Username = Username Text
   deriving (Eq, Show)
 
+instance Arbitrary Username where
+  arbitrary = Username . T.pack <$> arbitrary
+
 newtype Password = Password Text
   deriving (Eq)
 
 instance Show Password where
   show _ = "[REDACTED]"
+
+instance Arbitrary Password where
+  arbitrary = Password . T.pack <$> arbitrary
 
 newtype PasswordValue = PasswordValue Text
   deriving (Eq)
