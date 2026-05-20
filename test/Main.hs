@@ -28,7 +28,14 @@ import System.Posix.Files
     getFileStatus,
     setFileMode
   )
-import Test.QuickCheck (Arbitrary (arbitrary), Property, property, (==>))
+import Test.QuickCheck
+  ( Arbitrary (arbitrary),
+    Gen,
+    Property,
+    oneof,
+    property,
+    (==>)
+  )
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 import Test.Tasty.QuickCheck (testProperty)
@@ -47,6 +54,28 @@ data MockEnv = MockEnv
 
 instance Arbitrary MockEnv where
   arbitrary = MockEnv <$> arbitrary <*> arbitrary <*> arbitrary <*> pure mockNow
+
+newtype TestRequest = TestRequest
+  { unwrapTestRequest :: Agent.Request
+  }
+  deriving (Show)
+
+instance Arbitrary TestRequest where
+  arbitrary =
+    TestRequest
+      <$> oneof
+        [ Agent.UnlockRequest <$> arbitraryUsername <*> arbitraryPassword,
+          pure Agent.Status,
+          pure Agent.ListItems,
+          Agent.GetPasswordRequest <$> arbitrary,
+          pure Agent.UnknownRequest
+        ]
+
+arbitraryUsername :: Gen Agent.Username
+arbitraryUsername = Agent.Username . T.pack <$> arbitrary
+
+arbitraryPassword :: Gen Agent.Password
+arbitraryPassword = Agent.Password . T.pack <$> arbitrary
 
 instance Functor MockBitwarden where
   fmap f (MockBitwarden run) = MockBitwarden (f . run)
@@ -308,6 +337,8 @@ pureStateTransitionTests =
             propertyHandleRequestWithGetPasswordFailureDoesNotExposeSessionKey
         , testProperty "given a successful get-password response, show never exposes the plaintext password" $
             propertyPasswordResultShowDoesNotExposePassword
+        , testProperty "a refresh loop effect is only emitted by a successful unlock from the locked state" $
+            propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop
         ]
     , testGroup
         "handleListItems"
@@ -593,6 +624,26 @@ propertyPasswordResultShowDoesNotExposePassword loginItemId passwordText =
          in rendered /= passwordNeedle
               && not (passwordNeedle `T.isInfixOf` rendered)
       )
+
+propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop ::
+  TestRequest ->
+  Agent.AgentState ->
+  MockEnv ->
+  Property
+propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop testRequest initialState mockEnv =
+  let request = unwrapTestRequest testRequest
+      (newState, _, effects) =
+        runMockBitwarden mockEnv (Agent.handleRequestWith request initialState)
+   in property $
+        case effects of
+          [] -> True
+          [Agent.StartCacheRefreshLoop sessionKey] ->
+            case (request, initialState, newState) of
+              (Agent.UnlockRequest _ _, Agent.Locked, Agent.Unlocked unlockedSessionKey _) ->
+                sessionKey == unlockedSessionKey
+              _ ->
+                False
+          _ -> False
 
 propertyHandleUnlockFailure :: Agent.UnlockError -> Property
 propertyHandleUnlockFailure unlockError =
