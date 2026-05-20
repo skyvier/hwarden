@@ -56,17 +56,25 @@ data CommandBehavior
   = CommandSucceeds BS8.ByteString
   | CommandFails BS8.ByteString
 
+data LoginBehavior
+  = LoginCommandBehavior CommandBehavior
+  | EmailOtpRequired MissingCodeBehavior
+
+data MissingCodeBehavior
+  = MissingCodeHangs
+
 data BwBehavior = BwBehavior
   { logoutBehavior :: CommandBehavior,
     configServerBehavior :: CommandBehavior,
-    unlockBehavior :: CommandBehavior,
+    unlockBehavior :: LoginBehavior,
     listItemsBehavior :: CommandBehavior,
     getPasswordBehavior :: CommandBehavior
   }
 
 data AgentConfig = AgentConfig
   { agentBwBehavior :: BwBehavior,
-    agentServerUrlOverride :: Maybe String
+    agentServerUrlOverride :: Maybe String,
+    agentLoginTimeoutMicrosOverride :: Maybe String
   }
 
 data AgentResource = AgentResource
@@ -164,7 +172,7 @@ integrationTests =
         agent <-
           setupAgent
             defaultAgentConfig
-              { agentBwBehavior = defaultFailingBw {unlockBehavior = CommandSucceeds "session-key-123"}
+              { agentBwBehavior = defaultFailingBw {unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123")}
               }
         initialStatus <- sendRequest (socketPath agent) Agent.Status
         unlockResponse <-
@@ -184,7 +192,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandSucceeds listItemsPayload,
                       getPasswordBehavior = CommandFails "bw get password failed"
                     }
@@ -208,7 +216,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandSucceeds "super-secret"
                     }
@@ -232,7 +240,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandFails "item lookup failed"
                     }
@@ -256,7 +264,7 @@ integrationTests =
                   BwBehavior
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = CommandSucceeds "session-key-123",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehavior = CommandFails "bw list items failed",
                       getPasswordBehavior = CommandSucceeds ""
                     }
@@ -272,6 +280,26 @@ integrationTests =
           "expected empty password failure response"
           (Agent.Failure "password was empty")
           passwordResponse
+    , testCase "sending unlock fails instead of hanging when bw requires email OTP" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { unlockBehavior = EmailOtpRequired MissingCodeHangs },
+                agentLoginTimeoutMicrosOverride = Just "100000"
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        finalStatus <- sendRequest (socketPath agent) Agent.Status
+        cleanupAgent agent
+        assertEqual
+          "expected helpful OTP failure response"
+          (Agent.Failure "two-factor code required; run scripts/hwarden-first-login")
+          unlockResponse
+        assertEqual "expected locked status after missing OTP failure" (Agent.Success "locked") finalStatus
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
         agent <- setupAgent defaultAgentConfig
         initialStatus <- sendRequest (socketPath agent) Agent.Status
@@ -353,10 +381,14 @@ spawnConfiguredAgent agentConfig = do
         maybe id
           (setEnvVar "HWARDEN_SERVER_URL")
           (agentServerUrlOverride agentConfig)
+      applyLoginTimeoutOverride =
+        maybe id
+          (setEnvVar "HWARDEN_BW_LOGIN_TIMEOUT_MICROS")
+          (agentLoginTimeoutMicrosOverride agentConfig)
       agentBaseEnv =
         setEnvVar "PATH" pathValue
           (setEnvVar "XDG_RUNTIME_DIR" (Runtime.runtimeDir paths) baseEnv)
-      agentEnv = applyServerUrlOverride agentBaseEnv
+      agentEnv = applyLoginTimeoutOverride (applyServerUrlOverride agentBaseEnv)
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   pure
     AgentResource
@@ -446,7 +478,7 @@ scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
       "      printf '%s\\n' 'server was not configured before login' 1>&2",
       "      exit 1",
       "    fi",
-      emitBehavior "    " (unlockBehavior bwBehavior),
+      emitLoginBehavior "    " (unlockBehavior bwBehavior),
       "    ;;",
       "  list)",
       "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/configured\" ]; then",
@@ -497,6 +529,27 @@ emitBehavior indent commandBehavior =
           indent <> "exit 1"
         ]
 
+emitLoginBehavior :: BS8.ByteString -> LoginBehavior -> BS8.ByteString
+emitLoginBehavior indent loginBehavior =
+  case loginBehavior of
+    LoginCommandBehavior commandBehavior ->
+      emitBehavior indent commandBehavior
+    EmailOtpRequired missingCodeBehavior ->
+      BS8.unlines
+        [ indent <> "while [ $# -gt 0 ]; do",
+          indent <> "  shift",
+          indent <> "done",
+          emitMissingCodeBehavior indent missingCodeBehavior
+        ]
+
+emitMissingCodeBehavior :: BS8.ByteString -> MissingCodeBehavior -> BS8.ByteString
+emitMissingCodeBehavior indent missingCodeBehavior =
+  case missingCodeBehavior of
+    MissingCodeHangs ->
+      BS8.unlines
+        [ indent <> "  while :; do :; done"
+        ]
+
 emitLogoutBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
 emitLogoutBehavior indent commandBehavior =
   case commandBehavior of
@@ -535,7 +588,7 @@ defaultFailingBw =
   BwBehavior
     { logoutBehavior = CommandSucceeds "",
       configServerBehavior = CommandSucceeds "",
-      unlockBehavior = CommandFails "credentials were incorrect",
+      unlockBehavior = LoginCommandBehavior (CommandFails "credentials were incorrect"),
       listItemsBehavior = CommandFails "bw list items failed",
       getPasswordBehavior = CommandFails "bw get password failed"
     }
@@ -544,7 +597,8 @@ defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
   AgentConfig
     { agentBwBehavior = defaultFailingBw,
-      agentServerUrlOverride = Nothing
+      agentServerUrlOverride = Nothing,
+      agentLoginTimeoutMicrosOverride = Nothing
     }
 
 listItemsPayload :: BS8.ByteString
