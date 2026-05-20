@@ -23,11 +23,13 @@ library
     , directory
     , filepath
     , katip
+    , monad-time
     , network
     , process
     , QuickCheck
     , random
     , text
+    , time
     , unix
     , uuid
     , unliftio
@@ -59,6 +61,7 @@ test-suite hwarden-agent-test
     , hwarden-agent
     , filepath
     , katip
+    , monad-time
     , network
     , process
     , QuickCheck
@@ -67,6 +70,7 @@ test-suite hwarden-agent-test
     , tasty-hunit
     , tasty-quickcheck
     , text
+    , time
     , unix
     , uuid
   ghc-options:         -Wall

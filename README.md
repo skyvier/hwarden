@@ -91,9 +91,15 @@ Expected success:
   "ok": true,
   "items": [
     { "id": "1", "name": "Battle.net", "username": "joonas_laukka@hotmail.com" }
-  ]
+  ],
+  "cache_age_seconds": 0
 }
 ```
+
+The agent warms this cache during a successful `unlock` request and refreshes
+it in memory once a minute for the active unlocked session. If a background
+refresh fails after at least one successful refresh, the agent keeps serving
+the last cached item list and `cache_age_seconds` increases to show staleness.
 
 If the agent is still locked:
 

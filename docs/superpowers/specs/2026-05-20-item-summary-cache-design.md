@@ -80,13 +80,18 @@ current unlocked session. The loop should:
 1. sleep for 60 seconds
 2. run `bw list items` with the current session key
 3. on success, replace the cache contents and refresh timestamp
-4. on failure, keep the existing cached data unchanged and only record that the
-   latest refresh failed
-5. repeat while the agent remains unlocked for the same session
+4. on a transient failure, keep the existing cached data unchanged and only
+   record that the latest refresh failed
+5. on a session-expired failure, transition the agent back to `Locked`
+6. stop immediately if the unlocked session no longer matches the worker's
+   session key
+7. otherwise repeat while the agent remains unlocked for the same session
 
 The loop should be tied to the unlocked session so an old loop cannot overwrite
-cache state after a later unlock. A simple session-scoped generation token or
-equivalent guard is sufficient.
+cache state after the agent leaves that unlocked session. A session-key guard is
+sufficient for the current protocol because a second `unlock` while already
+unlocked does not replace the active session. The worker should exit rather
+than continue polling once that guard no longer matches.
 
 ### List-items behavior
 
@@ -124,7 +129,7 @@ availability.
 
 ### Background refresh failures
 
-If a periodic refresh fails:
+If a periodic refresh fails for a transient reason:
 
 - do not discard the last successful cached item list
 - do not downgrade the unlocked session to locked
@@ -134,6 +139,15 @@ If a periodic refresh fails:
 The staleness signal is carried by `cache_age_seconds`, not by changing the
 success/failure shape of cached `list-items` responses after at least one
 successful refresh.
+
+If a periodic refresh fails because the Bitwarden session is no longer usable:
+
+- transition the agent to `Locked`
+- stop the background refresh loop for that session
+- stop serving cached item lists for that expired session
+
+This keeps the cache aligned with the real session lifecycle instead of letting
+an orphan worker continue polling after expiry.
 
 ## Concurrency
 
@@ -172,9 +186,11 @@ Integration coverage should verify:
 3. Cached items are served without needing every subsequent refresh to succeed.
 4. After a refresh failure, the last successful cached items are still served
    and `cache_age_seconds` increases.
-5. If warmup fails right after a successful unlock, the agent still reports
+5. If the session expires during background refresh, the agent transitions back
+   to locked and the refresh worker stops.
+6. If warmup fails right after a successful unlock, the agent still reports
    unlock success and `list-items` fails until a later refresh succeeds.
-6. Locked-state `list-items` and all `get-password` behavior remain unchanged.
+7. Locked-state `list-items` and all `get-password` behavior remain unchanged.
 
 Unit tests in `Hwarden.Agent` may be useful for response shaping and
 state-transition logic, but the core confidence should come from integration
@@ -202,5 +218,5 @@ tests that exercise the fake `bw` process behavior.
 - Keeping stale cached data available improves availability, but the caller must
   interpret `cache_age_seconds` correctly when refreshes are failing.
 - Tying the refresh loop to the unlocked session keeps the design small, but it
-  requires care to prevent an older worker from updating state after a later
-  unlock.
+  requires care to both prevent an older worker from updating state after a
+  later unlock and to stop polling once the attached session has expired.

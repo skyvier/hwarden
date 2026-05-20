@@ -13,7 +13,7 @@ where
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), object, withObject, (.:), (.=))
 import Data.Text (Text)
 import qualified Data.Text as T
-import Test.QuickCheck (Arbitrary (arbitrary))
+import Test.QuickCheck (Arbitrary (arbitrary), elements, listOf1)
 
 newtype LoginItemId = LoginItemId Text
   deriving (Eq, Show)
@@ -50,7 +50,12 @@ instance Show SessionKey where
   show _ = "[REDACTED]"
 
 instance Arbitrary SessionKey where
-  arbitrary = SessionKey . T.pack <$> arbitrary
+  -- Keep generated session keys visually distinctive so secrecy tests can
+  -- detect actual leaks instead of colliding with ordinary JSON digits or
+  -- punctuation such as cache_age_seconds values.
+  arbitrary =
+    SessionKey . wrapNeedle . T.pack
+      <$> listOf1 (elements sessionKeyAlphabet)
 
 newtype Username = Username Text
   deriving (Eq, Show)
@@ -69,3 +74,12 @@ instance Show PasswordValue where
 
 instance Arbitrary PasswordValue where
   arbitrary = PasswordValue . T.pack <$> arbitrary
+
+wrapNeedle :: Text -> Text
+wrapNeedle value = "session-needle-" <> value <> "-end"
+
+sessionKeyAlphabet :: [Char]
+sessionKeyAlphabet =
+  ['a' .. 'z']
+    <> ['A' .. 'Z']
+    <> ['0' .. '9']
