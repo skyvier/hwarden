@@ -331,6 +331,8 @@ pureStateTransitionTests =
             propertyHandleUnlockFailure
         , testProperty "given a locked state, successful unlock action transitions state to unlocked" $
             propertyHandleUnlockSuccess
+        , testProperty "given a successful unlock and a failed initial item cache fill, unlock still succeeds and records the cache failure" $
+            propertyHandleUnlockCacheFillFailure
         ]
     , testGroup
         "cacheAgeSeconds"
@@ -350,17 +352,17 @@ pureStateTransitionTests =
         ]
     ]
 
-propertyHandleRequestWithUnlockSuccess :: Agent.SessionKey -> Property
-propertyHandleRequestWithUnlockSuccess sessionKey =
+propertyHandleRequestWithUnlockSuccess :: Agent.SessionKey -> [Agent.ItemSummary] -> Property
+propertyHandleRequestWithUnlockSuccess sessionKey items =
   let (newState, response, effects) =
         runMockBitwarden
-          (mkMockEnv (Right sessionKey) (Right []) (Left Bitwarden.GetPasswordUnavailable))
+          (mkMockEnv (Right sessionKey) (Right items) (Left Bitwarden.GetPasswordUnavailable))
           (Agent.handleRequestWith (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")) Agent.Locked)
    in property $
         newState
           == Agent.Unlocked
             sessionKey
-            (Agent.CacheReady (Agent.CacheEntry [] mockNow) Agent.LatestRefreshSucceeded)
+            (Agent.CacheReady (Agent.CacheEntry items mockNow) Agent.LatestRefreshSucceeded)
           && response == Agent.Success "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 
@@ -382,7 +384,7 @@ propertyDecideListItemsUnlocked sessionKey cacheEntry latestRefreshStatus =
     Agent.decide
       Agent.ListItems
       (Agent.Unlocked sessionKey (Agent.CacheReady cacheEntry latestRefreshStatus))
-      == Agent.ListItemsAction sessionKey cacheEntry
+      == Agent.ListItemsAction cacheEntry
 
 propertyDecideListItemsFailedCacheFill :: Agent.SessionKey -> Agent.CacheFillFailure -> Property
 propertyDecideListItemsFailedCacheFill sessionKey cacheFillFailure =
@@ -435,7 +437,7 @@ propertyHandleRequestWithListItemsPreservesState sessionKey cacheEntry latestRef
       items = Agent.cacheEntryItems cacheEntry
       (newState, response, effects) =
         runMockBitwarden
-          (mkMockEnv (Left Agent.UnlockUnavailable) (Right items) (Left Bitwarden.GetPasswordUnavailable))
+          (mkMockEnv (Left Agent.UnlockUnavailable) (Left (Agent.ListItemsFailed "list-items should not hit the backend")) (Left Bitwarden.GetPasswordUnavailable))
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
@@ -456,7 +458,7 @@ propertyHandleRequestWithListItemsReportsExactCacheAge sessionKey items latestRe
           (Agent.CacheReady cacheEntry latestRefreshStatus)
       (_, response, effects) =
         runMockBitwarden
-          (mkMockEnv (Left Agent.UnlockUnavailable) (Right items) (Left Bitwarden.GetPasswordUnavailable))
+          (mkMockEnv (Left Agent.UnlockUnavailable) (Left (Agent.ListItemsFailed "list-items should not hit the backend")) (Left Bitwarden.GetPasswordUnavailable))
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         response == Agent.ItemList items cacheAgeSecondsValue
@@ -556,7 +558,7 @@ propertyHandleRequestWithListItemsDoesNotExposeSessionKey sessionKey items =
           (Agent.CacheReady (Agent.CacheEntry items sampleTime) Agent.LatestRefreshSucceeded)
       (newState, response, effects) =
         runMockBitwarden
-          (mkMockEnv (Left Agent.UnlockUnavailable) (Right items) (Left Bitwarden.GetPasswordUnavailable))
+          (mkMockEnv (Left Agent.UnlockUnavailable) (Left (Agent.ListItemsFailed "list-items should not hit the backend")) (Left Bitwarden.GetPasswordUnavailable))
           (Agent.handleRequestWith Agent.ListItems currentState)
    in itemsDoNotContainSessionKey sessionKey items ==>
         property
@@ -674,17 +676,33 @@ propertyHandleListItemsReportsExactCacheAge items initialState cacheAgeSecondsVa
         response == Agent.ItemList items cacheAgeSecondsValue
           && null effects
 
-propertyHandleUnlockSuccess :: Agent.SessionKey -> Property
-propertyHandleUnlockSuccess sessionKey =
+propertyHandleUnlockSuccess :: Agent.SessionKey -> [Agent.ItemSummary] -> Property
+propertyHandleUnlockSuccess sessionKey items =
   let (newState, response, effects) =
         runMockBitwarden
-          (mkMockEnv (Right sessionKey) (Right []) (Left Bitwarden.GetPasswordUnavailable))
+          (mkMockEnv (Right sessionKey) (Right items) (Left Bitwarden.GetPasswordUnavailable))
           (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
    in property $
         newState
           == Agent.Unlocked
             sessionKey
-            (Agent.CacheReady (Agent.CacheEntry [] mockNow) Agent.LatestRefreshSucceeded)
+            (Agent.CacheReady (Agent.CacheEntry items mockNow) Agent.LatestRefreshSucceeded)
+          && response == Agent.Success "unlocked"
+          && effects == [Agent.StartCacheRefreshLoop sessionKey]
+
+propertyHandleUnlockCacheFillFailure ::
+  Agent.SessionKey ->
+  Agent.ListItemsError ->
+  Property
+propertyHandleUnlockCacheFillFailure sessionKey listItemsFailure =
+  let expectedCacheFailure =
+        Agent.cacheFillFailureFromListItemsError sessionKey listItemsFailure
+      (newState, response, effects) =
+        runMockBitwarden
+          (mkMockEnv (Right sessionKey) (Left listItemsFailure) (Left Bitwarden.GetPasswordUnavailable))
+          (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
+   in property $
+        newState == Agent.Unlocked sessionKey (Agent.CacheFillError expectedCacheFailure)
           && response == Agent.Success "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 

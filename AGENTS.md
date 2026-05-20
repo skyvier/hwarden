@@ -29,6 +29,18 @@
 - Maintain strict filesystem permissions for the socket directory.
 - If behavior changes, update `README.md` with the new request or response contract.
 
+## Test strategy
+
+- Prefer tests with one primary purpose.
+- Use `decide` tests for request routing by agent state.
+- Use handler/unit tests for state transitions, backend result mapping, and
+  exact time-dependent behavior.
+- Use integration tests only for end-to-end daemon lifecycles such as startup,
+  unlock, cache warmup, background refresh, and socket responses.
+- Do not re-test unrelated invariants under every new feature dimension.
+- Before adding a test, state what new behavior it proves that existing tests
+  do not already prove.
+
 ## Git commit messages
 
 When writing Git commit messages, follow this format exactly:
