@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/hwarden-lib
+source "$SCRIPT_DIR/hwarden-lib"
+
+hwarden_require_rofi_dependencies
+
+status_value=$("$SCRIPT_DIR/hwarden-status")
+if [ "$status_value" = "unlocked" ]; then
+  exit 0
+fi
+
+email=${HWARDEN_EMAIL:-}
+if [ -z "$email" ]; then
+  email=$(hwarden_rofi_input "Bitwarden email") || exit 1
+fi
+[ -n "$email" ] || exit 1
+
+password=${HWARDEN_PASSWORD:-}
+if [ -z "$password" ]; then
+  password=$(hwarden_rofi_secret "Bitwarden password") || exit 1
+fi
+[ -n "$password" ] || exit 1
+
+unlock_once() {
+  local response_json
+  response_json=$(hwarden_send_request "$(hwarden_unlock_request "$email" "$password")")
+
+  if hwarden_response_ok "$response_json"; then
+    return 0
+  fi
+
+  local error_message
+  error_message=$(hwarden_response_error "$response_json")
+  printf '%s' "$error_message"
+  return 1
+}
+
+if unlock_error=$(unlock_once); then
+  exit 0
+fi
+
+hwarden_rofi_error "$unlock_error"
+exit 1

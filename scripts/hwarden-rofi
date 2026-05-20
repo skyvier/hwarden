@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/hwarden-lib
+source "$SCRIPT_DIR/hwarden-lib"
+
+prefix_filter=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix)
+      [ "$#" -ge 2 ] || hwarden_fail "missing value for --prefix"
+      [ -n "$2" ] || hwarden_fail "empty value for --prefix"
+      prefix_filter=$2
+      shift 2
+      ;;
+    *)
+      hwarden_fail "unknown argument: $1"
+      ;;
+  esac
+done
+
+hwarden_require_rofi_dependencies
+hwarden_require_x11_clipboard
+
+"$SCRIPT_DIR/hwarden-ensure-unlocked"
+
+items_json=$("$SCRIPT_DIR/hwarden-list-items")
+if [ -n "$prefix_filter" ]; then
+  items_json=$(hwarden_filter_items_by_prefix "$items_json" "$prefix_filter")
+fi
+
+item_count=$(printf '%s' "$items_json" | jq 'length')
+[ "$item_count" -gt 0 ] || {
+  if [ -n "$prefix_filter" ]; then
+    hwarden_rofi_error "no login items match prefix: $prefix_filter"
+  else
+    hwarden_rofi_error "no login items available"
+  fi
+  exit 1
+}
+
+labels=$(
+  printf '%s' "$items_json" |
+    jq -r '.[] | "\(.name) [\(.username)]"'
+)
+
+selected_index=$(
+  printf '%s\n' "$labels" |
+    rofi -dmenu -format i -p "Bitwarden"
+) || exit 1
+
+[ -n "$selected_index" ] || exit 1
+
+item_id=$(
+  printf '%s' "$items_json" |
+    jq -r ".[$selected_index].id"
+)
+
+[ "$item_id" != "null" ] || hwarden_fail "failed to resolve selected item"
+
+hwarden_rofi_progress \
+  "Loading password..." \
+  "Password copied" \
+  "Password copy failed" \
+  "$SCRIPT_DIR/hwarden-copy-password" "$item_id"
