@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/hwarden-lib
+source "$SCRIPT_DIR/hwarden-lib"
+
+hwarden_require_cmd jq
+
+response_json=$(hwarden_send_request "$(hwarden_list_items_request)")
+
+if ! hwarden_response_ok "$response_json"; then
+  hwarden_fail "$(hwarden_response_error "$response_json")"
+fi
+
+hwarden_items_json "$response_json"
