@@ -92,6 +92,75 @@ request.
 Bad JSON returns `{"ok":false,"error":"..."}`. Unknown commands return
 `{"ok":false,"error":"unknown request"}`.
 
+## Minimal rofi frontend
+
+This repository also includes a small shell-based frontend under `scripts/`.
+It talks to the existing local agent socket and does not modify the backend.
+
+Frontend dependencies:
+
+- `rofi`
+- `jq`
+- `nc` with Unix socket support
+- `xclip`
+
+Main entrypoint:
+
+```sh
+scripts/hwarden-rofi
+```
+
+For demos, you can restrict the visible items by name prefix:
+
+```sh
+scripts/hwarden-rofi --prefix "Demo"
+```
+
+The prefix match is case-insensitive and only affects the frontend picker; it
+does not change the backend `list-items` response.
+
+The rofi frontend:
+
+- checks whether the agent is already unlocked
+- prompts for Bitwarden email and password when needed
+- lets you choose a login item from rofi
+- copies the selected password to the X11 clipboard
+
+Available helper commands:
+
+- `scripts/hwarden-first-login`
+- `scripts/hwarden-status`
+- `scripts/hwarden-unlock`
+- `scripts/hwarden-list-items`
+- `scripts/hwarden-get-password`
+- `scripts/hwarden-ensure-unlocked`
+- `scripts/hwarden-copy-password`
+
+If the Bitwarden CLI needs an interactive first-time login flow, use:
+
+```sh
+scripts/hwarden-first-login
+```
+
+That script:
+
+- uses the agent's isolated `BITWARDENCLI_APPDATA_DIR`
+- configures the same server as the agent
+- runs interactive `bw login`
+- logs out afterward so the agent can later start from its expected state
+
+`scripts/hwarden-unlock` expects the email as its positional argument and the
+secret values via environment variables:
+
+```sh
+HWARDEN_PASSWORD='MY_PASSWORD' scripts/hwarden-unlock me@example.com
+```
+
+`scripts/hwarden-get-password ITEM_ID` prints the plaintext password to stdout.
+That is intentional for scripting, but `scripts/hwarden-rofi` and
+`scripts/hwarden-copy-password` copy the password directly to the clipboard
+instead of printing it.
+
 ## Manual testing with nc
 
 Start the agent in one terminal:
@@ -119,6 +188,13 @@ Expected failure:
 
 ```json
 {"ok":false,"error":"..."}
+```
+
+If Bitwarden requires interactive two-factor setup for this CLI client, the
+agent returns:
+
+```json
+{"ok":false,"error":"two-factor code required; run scripts/hwarden-first-login"}
 ```
 
 Check the current lock status:

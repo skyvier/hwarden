@@ -86,13 +86,13 @@ instance FromJSON BwItem where
     BwItem <$> obj .: "id" <*> obj .: "name" <*> obj .:? "login"
 
 data BwLogin = BwLogin
-  { bwLoginUsername :: Text
+  { bwLoginUsername :: Maybe Text
   }
   deriving (Eq, Show)
 
 instance FromJSON BwLogin where
   parseJSON = withObject "BwLogin" $ \obj ->
-    BwLogin <$> obj .: "username"
+    BwLogin <$> obj .:? "username"
 
 extractLoginItems :: [BwItem] -> [ItemSummary]
 extractLoginItems = mapMaybe toItemSummary
@@ -106,5 +106,5 @@ toItemSummary item =
         ( ItemSummary
             (bwItemId item)
             (bwItemName item)
-            (bwLoginUsername login)
+            (maybe "" id (bwLoginUsername login))
         )
