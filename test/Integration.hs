@@ -60,13 +60,14 @@ data BwBehavior = BwBehavior
   { logoutBehavior :: CommandBehavior,
     configServerBehavior :: CommandBehavior,
     unlockBehavior :: CommandBehavior,
-    listItemsBehavior :: CommandBehavior,
+    listItemsBehaviors :: [CommandBehavior],
     getPasswordBehavior :: CommandBehavior
   }
 
 data AgentConfig = AgentConfig
   { agentBwBehavior :: BwBehavior,
-    agentServerUrlOverride :: Maybe String
+    agentServerUrlOverride :: Maybe String,
+    agentRefreshIntervalSecondsOverride :: Maybe Int
   }
 
 data AgentResource = AgentResource
@@ -185,7 +186,7 @@ integrationTests =
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
-                      listItemsBehavior = CommandSucceeds listItemsPayload,
+                      listItemsBehaviors = [CommandSucceeds listItemsPayload],
                       getPasswordBehavior = CommandFails "bw get password failed"
                     }
               }
@@ -198,8 +199,103 @@ integrationTests =
         assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
         assertEqual
           "expected listed login items"
-          (Agent.ItemList listItemsSummary)
+          (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
           itemsResponse
+    , testCase "sending unlock then waiting for the background refresh returns refreshed login item summaries" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehaviors =
+                        [ CommandSucceeds listItemsPayload,
+                          CommandSucceeds refreshedListItemsPayload
+                        ],
+                      getPasswordBehavior = CommandFails "bw get password failed"
+                    },
+                agentRefreshIntervalSecondsOverride = Just 1
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        itemsResponse <-
+          waitForMatchingResponse
+            (socketPath agent)
+            Agent.ListItems
+            (matchesExpectedItems refreshedListItemsSummary)
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertItemListMatches "expected refreshed login items" refreshedListItemsSummary itemsResponse
+    , testCase "sending unlock with a failed initial cache fill eventually serves cached items after a background refresh" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehaviors =
+                        [ CommandFails "bw list items failed",
+                          CommandSucceeds listItemsPayload
+                        ],
+                      getPasswordBehavior = CommandFails "bw get password failed"
+                    },
+                agentRefreshIntervalSecondsOverride = Just 1
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        initialItemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+        recoveredItemsResponse <-
+          waitForMatchingResponse
+            (socketPath agent)
+            Agent.ListItems
+            (matchesExpectedItems listItemsSummary)
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        assertEqual "expected cache-unavailable response before refresh succeeds" (Agent.Failure "item cache unavailable") initialItemsResponse
+        assertItemListMatches "expected cached items after background refresh succeeds" listItemsSummary recoveredItemsResponse
+    , testCase "sending unlock then waiting for a failed background refresh still serves stale cached items" $ do
+        agent <-
+          setupAgent
+            defaultAgentConfig
+              { agentBwBehavior =
+                  BwBehavior
+                    { logoutBehavior = CommandSucceeds "",
+                      configServerBehavior = CommandSucceeds "",
+                      unlockBehavior = CommandSucceeds "session-key-123",
+                      listItemsBehaviors =
+                        [ CommandSucceeds listItemsPayload,
+                          CommandFails "bw list items failed"
+                        ],
+                      getPasswordBehavior = CommandFails "bw get password failed"
+                    },
+                agentRefreshIntervalSecondsOverride = Just 1
+              }
+        unlockResponse <-
+          sendRequest
+            (socketPath agent)
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+        threadDelay 1200000
+        itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+        cleanupAgent agent
+        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+        case itemsResponse of
+          Agent.ItemList actualItems (Agent.CacheAgeSeconds ageSeconds) -> do
+            assertEqual "expected stale cached items after refresh failure" listItemsSummary actualItems
+            assertBool "expected stale cache age after refresh failure" (ageSeconds >= 1)
+            assertBool "expected recent stale cache age after refresh failure" (ageSeconds <= 5)
+          _ ->
+            assertEqual
+              "expected stale cached items after refresh failure"
+              (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
+              itemsResponse
     , testCase "sending unlock then get-password via the socket returns item id and password" $ do
         agent <-
           setupAgent
@@ -209,7 +305,7 @@ integrationTests =
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
-                      listItemsBehavior = CommandFails "bw list items failed",
+                      listItemsBehaviors = [CommandFails "bw list items failed"],
                       getPasswordBehavior = CommandSucceeds "super-secret"
                     }
               }
@@ -233,7 +329,7 @@ integrationTests =
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
-                      listItemsBehavior = CommandFails "bw list items failed",
+                      listItemsBehaviors = [CommandFails "bw list items failed"],
                       getPasswordBehavior = CommandFails "item lookup failed"
                     }
               }
@@ -257,7 +353,7 @@ integrationTests =
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = CommandSucceeds "session-key-123",
-                      listItemsBehavior = CommandFails "bw list items failed",
+                      listItemsBehaviors = [CommandFails "bw list items failed"],
                       getPasswordBehavior = CommandSucceeds ""
                     }
               }
@@ -353,10 +449,14 @@ spawnConfiguredAgent agentConfig = do
         maybe id
           (setEnvVar "HWARDEN_SERVER_URL")
           (agentServerUrlOverride agentConfig)
+      applyRefreshIntervalOverride =
+        maybe id
+          (setEnvVar "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS" . show)
+          (agentRefreshIntervalSecondsOverride agentConfig)
       agentBaseEnv =
         setEnvVar "PATH" pathValue
           (setEnvVar "XDG_RUNTIME_DIR" (Runtime.runtimeDir paths) baseEnv)
-      agentEnv = applyServerUrlOverride agentBaseEnv
+      agentEnv = applyRefreshIntervalOverride (applyServerUrlOverride agentBaseEnv)
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   pure
     AgentResource
@@ -454,7 +554,11 @@ scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
       "      exit 1",
       "    fi",
       "    if [ \"$2\" = \"items\" ]; then",
-      emitBehavior "      " (listItemsBehavior bwBehavior),
+      "      LIST_ITEMS_COUNT_FILE=\"$BITWARDENCLI_APPDATA_DIR/list-items-count\"",
+      "      list_items_count=0",
+      "      if [ -f \"$LIST_ITEMS_COUNT_FILE\" ]; then IFS= read -r list_items_count < \"$LIST_ITEMS_COUNT_FILE\"; fi",
+      "      printf '%s' $((list_items_count + 1)) > \"$LIST_ITEMS_COUNT_FILE\"",
+      emitIndexedBehavior "      " (listItemsBehaviors bwBehavior),
       "    else",
       "      printf '%s\\n' 'unsupported list command' 1>&2",
       "      exit 1",
@@ -497,6 +601,27 @@ emitBehavior indent commandBehavior =
           indent <> "exit 1"
         ]
 
+emitIndexedBehavior :: BS8.ByteString -> [CommandBehavior] -> BS8.ByteString
+emitIndexedBehavior indent commandBehaviors =
+  BS8.unlines $
+    [ indent <> "case \"$list_items_count\" in"
+    ]
+      <> zipWith (emitIndexedCase indent) [0 :: Int ..] commandBehaviors
+      <> [ indent <> "  *)",
+           indent <> "    printf '%s\\n' 'unsupported list command count' 1>&2",
+           indent <> "    exit 1",
+           indent <> "    ;;",
+           indent <> "esac"
+         ]
+
+emitIndexedCase :: BS8.ByteString -> Int -> CommandBehavior -> BS8.ByteString
+emitIndexedCase indent index commandBehavior =
+  BS8.unlines
+    [ indent <> "  " <> BS8.pack (show index) <> ")",
+      emitBehavior (indent <> "    ") commandBehavior,
+      indent <> "    ;;"
+    ]
+
 emitLogoutBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
 emitLogoutBehavior indent commandBehavior =
   case commandBehavior of
@@ -536,7 +661,7 @@ defaultFailingBw =
     { logoutBehavior = CommandSucceeds "",
       configServerBehavior = CommandSucceeds "",
       unlockBehavior = CommandFails "credentials were incorrect",
-      listItemsBehavior = CommandFails "bw list items failed",
+      listItemsBehaviors = [CommandFails "bw list items failed"],
       getPasswordBehavior = CommandFails "bw get password failed"
     }
 
@@ -544,7 +669,8 @@ defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
   AgentConfig
     { agentBwBehavior = defaultFailingBw,
-      agentServerUrlOverride = Nothing
+      agentServerUrlOverride = Nothing,
+      agentRefreshIntervalSecondsOverride = Nothing
     }
 
 listItemsPayload :: BS8.ByteString
@@ -580,6 +706,52 @@ listItemsSummary =
   [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com",
     Agent.ItemSummary "2" "GitHub" "skyvier"
   ]
+
+refreshedListItemsPayload :: BS8.ByteString
+refreshedListItemsPayload =
+  BS8.unlines
+    [ "[",
+      "  {",
+      "    \"id\": \"3\",",
+      "    \"name\": \"Fastmail\",",
+      "    \"login\": {",
+      "      \"username\": \"skyvier@example.com\"",
+      "    }",
+      "  }",
+      "]"
+    ]
+
+refreshedListItemsSummary :: [Agent.ItemSummary]
+refreshedListItemsSummary =
+  [ Agent.ItemSummary "3" "Fastmail" "skyvier@example.com"
+  ]
+
+assertItemListMatches :: String -> [Agent.ItemSummary] -> Agent.Response -> IO ()
+assertItemListMatches message expectedItems response =
+  case response of
+    Agent.ItemList actualItems _ ->
+      assertEqual message expectedItems actualItems
+    -- Keep the expected ItemList shape in the failure output when the
+    -- response constructor is wrong.
+    _ ->
+      assertEqual message (Agent.ItemList expectedItems (Agent.CacheAgeSeconds 0)) response
+
+waitForMatchingResponse :: FilePath -> Agent.Request -> (Agent.Response -> Bool) -> IO Agent.Response
+waitForMatchingResponse agentSocketPath request matchesResponse =
+  go (60 :: Int)
+  where
+    go 0 = sendRequest agentSocketPath request
+    go retriesRemaining = do
+      response <- sendRequest agentSocketPath request
+      if matchesResponse response
+        then pure response
+        else threadDelay 50000 >> go (retriesRemaining - 1)
+
+matchesExpectedItems :: [Agent.ItemSummary] -> Agent.Response -> Bool
+matchesExpectedItems expectedItems response =
+  case response of
+    Agent.ItemList actualItems _ -> actualItems == expectedItems
+    _ -> False
 
 requireExecutable :: String -> IO FilePath
 requireExecutable name = do

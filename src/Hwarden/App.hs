@@ -10,7 +10,8 @@ module Hwarden.App
   )
 where
 
-import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.Time (MonadTime)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, ReaderT, asks, local, runReaderT)
 import Data.Text (Text)
 import Hwarden.Bitwarden (Bitwarden, determineBitwardenServerUrl)
@@ -42,6 +43,8 @@ import Katip
   )
 import System.Environment (lookupEnv)
 import System.IO (stdout)
+import Text.Read (readMaybe)
+import qualified Control.Monad.Time as MonadTime
 import UnliftIO (MonadUnliftIO)
 
 data Env = Env
@@ -49,7 +52,8 @@ data Env = Env
     envLogContexts :: LogContexts,
     envNamespace :: Namespace,
     envBitwardenCliAppDataDir :: FilePath,
-    envBitwardenServerUrl :: Text
+    envBitwardenServerUrl :: Text,
+    envCacheRefreshIntervalSeconds :: Int
   }
 
 newtype AgentT a = AgentT
@@ -74,6 +78,10 @@ instance KatipContext AgentT where
     where
       updateNamespace env = env {envNamespace = f (envNamespace env)}
 
+instance MonadTime AgentT where
+  currentTime = liftIO MonadTime.currentTime
+  monotonicTime = liftIO MonadTime.monotonicTime
+
 instance HasBitwardenCliConfig Env where
   bitwardenCliAppDataDir = envBitwardenCliAppDataDir
   bitwardenServerUrl = envBitwardenServerUrl
@@ -87,6 +95,9 @@ initAgentEnv runtimeDir = do
   let isolatedBitwardenCliAppDataDir =
         Runtime.bitwardenCliAppDataDir (Runtime.deriveAgentPaths runtimeDir)
   serverUrl <- lookupEnv "HWARDEN_SERVER_URL"
+  cacheRefreshIntervalSeconds <-
+    maybe defaultCacheRefreshIntervalSeconds parseCacheRefreshIntervalSeconds
+      <$> lookupEnv "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS"
   logEnv <- initAgentLogEnv
   return $
     Env
@@ -95,9 +106,19 @@ initAgentEnv runtimeDir = do
       "hwarden-agent"
       isolatedBitwardenCliAppDataDir
       (determineBitwardenServerUrl serverUrl)
+      cacheRefreshIntervalSeconds
 
 initAgentLogEnv :: IO LogEnv
 initAgentLogEnv = do
   handleScribe <- mkHandleScribe ColorIfTerminal stdout (permitItem DebugS) V2
   baseLogEnv <- initLogEnv "hwarden-agent" "production"
   registerScribe "stdout" handleScribe defaultScribeSettings baseLogEnv
+
+defaultCacheRefreshIntervalSeconds :: Int
+defaultCacheRefreshIntervalSeconds = 60
+
+parseCacheRefreshIntervalSeconds :: String -> Int
+parseCacheRefreshIntervalSeconds value =
+  case readMaybe value of
+    Just intervalSeconds | intervalSeconds > 0 -> intervalSeconds
+    _ -> defaultCacheRefreshIntervalSeconds

@@ -3,6 +3,12 @@
 module Hwarden.Agent
   ( Bitwarden (..),
     AgentState (..),
+    CacheAgeSeconds (..),
+    CacheFillFailure (..),
+    CacheEntry (..),
+    ItemCacheState (..),
+    LatestRefreshStatus (..),
+    Effect (..),
     Decision (..),
     GetPasswordError (..),
     ItemSummary (..),
@@ -25,15 +31,19 @@ module Hwarden.Agent
     prepareRuntimeDir,
     removeExistingSocket,
     runAgent,
-    sanitizeUnlockError
+    cacheAgeSeconds,
+    sanitizeUnlockError,
+    updateItemCacheState
   )
 where
 
 import UnliftIO.MVar (MVar, modifyMVar, newMVar)
+import Control.Monad.Time (MonadTime, currentTime)
 import Control.Exception (finally)
 import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad (forever, when)
+import Control.Monad (forever, void, when)
+import Control.Monad.Reader (asks)
 import Data.Aeson
   ( FromJSON (parseJSON),
     ToJSON (toJSON),
@@ -47,6 +57,8 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Time.Clock (UTCTime, diffUTCTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Hwarden.Bitwarden
   ( Bitwarden (getPassword, listItems, unlock),
     GetPasswordError (..),
@@ -89,9 +101,10 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.Posix.Files (ownerModes, setFileMode)
-import Test.QuickCheck (Arbitrary (arbitrary))
+import Test.QuickCheck (Arbitrary (arbitrary), Gen, NonNegative (getNonNegative), oneof)
 import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
+import qualified UnliftIO.Concurrent as Concurrent
 
 data Request
   = UnlockRequest Username Password
@@ -103,28 +116,86 @@ data Request
 
 data Response
   = Success Text
-  | ItemList [ItemSummary]
+  | ItemList [ItemSummary] CacheAgeSeconds
   | PasswordResult LoginItemId PasswordValue
   | Failure Text
   deriving (Eq)
 
 instance Show Response where
   show (Success message) = "Success " <> show message
-  show (ItemList items) = "ItemList " <> show items
+  show (ItemList items cacheAgeSecondsValue) = "ItemList " <> show items <> " " <> show cacheAgeSecondsValue
   show (PasswordResult loginItemId password) = "PasswordResult " <> show loginItemId <> " " <> show password
   show (Failure err) = "Failure " <> show err
 
+data LatestRefreshStatus
+  = LatestRefreshSucceeded
+  | LatestRefreshFailed CacheFillFailure
+  deriving (Eq, Show)
+
+data CacheFillFailure
+  = CacheFillUnavailable
+  | CacheFillFailed Text
+  deriving (Eq, Show)
+
+newtype CacheAgeSeconds = CacheAgeSeconds Int
+  deriving (Eq, Show)
+
+instance Arbitrary CacheAgeSeconds where
+  arbitrary = CacheAgeSeconds . getNonNegative <$> arbitrary
+
+instance Arbitrary CacheFillFailure where
+  arbitrary =
+    oneof
+      [ pure CacheFillUnavailable,
+        CacheFillFailed . T.pack <$> arbitrary
+      ]
+
+instance Arbitrary LatestRefreshStatus where
+  arbitrary =
+    oneof
+      [ pure LatestRefreshSucceeded,
+        LatestRefreshFailed <$> arbitrary
+      ]
+
+data CacheEntry = CacheEntry
+  { cacheEntryItems :: [ItemSummary],
+    cacheEntryRefreshedAt :: UTCTime
+  }
+  deriving (Eq, Show)
+
+instance Arbitrary CacheEntry where
+  arbitrary =
+    CacheEntry <$> arbitrary <*> arbitraryUtcTime
+
+data ItemCacheState
+  = CacheNotYetFilled
+  | CacheFillError CacheFillFailure
+  | CacheReady CacheEntry LatestRefreshStatus
+  deriving (Eq, Show)
+
+instance Arbitrary ItemCacheState where
+  arbitrary =
+    oneof
+      [ pure CacheNotYetFilled,
+        CacheFillError <$> arbitrary,
+        CacheReady <$> arbitrary <*> arbitrary
+      ]
+
 data AgentState
   = Locked
-  | Unlocked SessionKey
+  | Unlocked SessionKey ItemCacheState
   deriving (Eq, Show)
 
 instance Arbitrary AgentState where
-  arbitrary =
-    propertyState <$> arbitrary
-    where
-      propertyState Nothing = Locked
-      propertyState (Just sessionKey) = Unlocked sessionKey
+  arbitrary = do
+    maybeSessionKey <- arbitrary
+    case maybeSessionKey of
+      Nothing -> pure Locked
+      Just sessionKey -> Unlocked sessionKey <$> arbitrary
+
+arbitraryUtcTime :: Gen UTCTime
+arbitraryUtcTime =
+  posixSecondsToUTCTime . fromInteger . abs <$> arbitrary
 
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
@@ -167,10 +238,11 @@ instance ToJSON Response where
       [ "ok" .= True,
         "message" .= message
       ]
-  toJSON (ItemList items) =
+  toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue)) =
     object
       [ "ok" .= True,
-        "items" .= items
+        "items" .= items,
+        "cache_age_seconds" .= cacheAgeSecondsValue
       ]
   toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
     object
@@ -190,7 +262,7 @@ instance FromJSON Response where
     if ok
       then
         (PasswordResult . LoginItemId <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
-          <|> (ItemList <$> obj .: "items")
+          <|> (ItemList <$> obj .: "items" <*> (CacheAgeSeconds <$> obj .: "cache_age_seconds"))
           <|> (Success <$> obj .: "message")
       else Failure <$> obj .: "error"
 
@@ -264,24 +336,33 @@ handleConnection agentEnv agentStateVar conn =
     (close conn)
 
 handleRequest :: MVar AgentState -> Request -> AgentT Response
-handleRequest agentStateVar request =
-  modifyMVar agentStateVar $ handleRequestWith request
+handleRequest agentStateVar request = do
+  (response, effects) <-
+    modifyMVar agentStateVar $ \agentState -> do
+      (newState, response, effects) <- handleRequestWith request agentState
+      pure (newState, (response, effects))
+  mapM_ (runEffect agentStateVar) effects
+  pure response
 
 
-handleRequestWith :: Bitwarden m => Request -> AgentState -> m (AgentState, Response)
+handleRequestWith :: (Bitwarden m, MonadTime m) => Request -> AgentState -> m (AgentState, Response, [Effect])
 handleRequestWith request agentState =
   case decide request agentState of
-    Unlock username password -> 
+    Unlock username password ->
       handleUnlock username password
-    ListItemsAction sessionKey ->
-      handleListItems sessionKey agentState
+    ListItemsAction _ cacheEntry ->
+      handleListItems cacheEntry agentState
     GetPasswordAction sessionKey loginItemId ->
       handleGetPassword sessionKey loginItemId agentState
-    Reply response -> pure (agentState, response)
+    Reply response -> pure (agentState, response, [])
+
+data Effect
+  = StartCacheRefreshLoop SessionKey
+  deriving (Eq, Show)
 
 data Decision 
   = Unlock Username Password
-  | ListItemsAction SessionKey
+  | ListItemsAction SessionKey CacheEntry
   | GetPasswordAction SessionKey LoginItemId
   | Reply Response
   deriving (Eq, Show)
@@ -289,47 +370,131 @@ data Decision
 decide :: Request -> AgentState -> Decision
 decide (UnlockRequest username password) agentState =
   case agentState of
-    Unlocked _ -> Reply (Success "already unlocked")
+    Unlocked _ _ -> Reply (Success "already unlocked")
     Locked -> Unlock username password
 decide Status agentState =
   case agentState of
     Locked -> Reply (Success "locked")
-    Unlocked _ -> Reply (Success "unlocked")
+    Unlocked _ _ -> Reply (Success "unlocked")
 decide ListItems agentState =
   case agentState of
     Locked -> Reply (Failure "locked")
-    Unlocked sessionKey -> ListItemsAction sessionKey
+    Unlocked sessionKey (CacheReady cacheEntry _) -> ListItemsAction sessionKey cacheEntry
+    Unlocked _ _ -> Reply (Failure "item cache unavailable")
 decide (GetPasswordRequest loginItemId) agentState =
   case agentState of
     Locked -> Reply (Failure "locked")
-    Unlocked sessionKey -> GetPasswordAction sessionKey loginItemId
+    Unlocked sessionKey _ -> GetPasswordAction sessionKey loginItemId
 decide UnknownRequest _ = Reply (Failure "unknown request")
 
-handleUnlock :: Bitwarden m => Username -> Password -> m (AgentState, Response)
+handleUnlock :: (Bitwarden m, MonadTime m) => Username -> Password -> m (AgentState, Response, [Effect])
 handleUnlock email password = do
   result <- unlock email password
   case result of
     Left UnlockUnavailable ->
-      pure (Locked, Failure "bw login failed")
+      pure (Locked, Failure "bw login failed", [])
     Left (UnlockFailed err) ->
-      pure (Locked, Failure (sanitizeUnlockError password err))
-    Right sessionKey ->
-      pure (Unlocked sessionKey, Success "unlocked")
+      pure (Locked, Failure (sanitizeUnlockError password err), [])
+    Right sessionKey -> do
+      cacheState <- buildInitialCacheState sessionKey
+      pure
+        ( Unlocked sessionKey cacheState,
+          Success "unlocked",
+          [StartCacheRefreshLoop sessionKey]
+        )
 
-handleListItems :: Bitwarden m => SessionKey -> AgentState -> m (AgentState, Response)
-handleListItems sessionKey agentState = do
-  result <- listItems sessionKey
-  let response =
-        case result of
-          Left ListItemsUnavailable ->
-            Failure "bw list items failed"
-          Left (ListItemsFailed err) ->
-            Failure (sanitizeListItemsFailure sessionKey err)
-          Right items ->
-            ItemList items
-  pure (agentState, response)
+buildInitialCacheState :: (Bitwarden m, MonadTime m) => SessionKey -> m ItemCacheState
+buildInitialCacheState sessionKey =
+  initialItemCacheState <$> refreshCacheEntry sessionKey
 
-handleGetPassword :: Bitwarden m => SessionKey -> LoginItemId -> AgentState -> m (AgentState, Response)
+handleListItems :: MonadTime m => CacheEntry -> AgentState -> m (AgentState, Response, [Effect])
+handleListItems cacheEntry agentState = do
+  now <- currentTime
+  pure (agentState, ItemList (cacheEntryItems cacheEntry) (cacheAgeSeconds now cacheEntry), [])
+
+cacheAgeSeconds :: UTCTime -> CacheEntry -> CacheAgeSeconds
+cacheAgeSeconds now cacheEntry =
+  CacheAgeSeconds (floor (diffUTCTime now (cacheEntryRefreshedAt cacheEntry)))
+
+runEffect :: MVar AgentState -> Effect -> AgentT ()
+runEffect agentStateVar effect =
+  case effect of
+    StartCacheRefreshLoop sessionKey ->
+      startRefreshLoop agentStateVar sessionKey
+
+startRefreshLoop :: MVar AgentState -> SessionKey -> AgentT ()
+startRefreshLoop agentStateVar sessionKey = do
+  refreshIntervalMicroseconds <-
+    (* 1000000) <$> asks envCacheRefreshIntervalSeconds
+  katipAddNamespace cacheRefreshNamespace $ do
+    logInfo "starting item cache refresh loop"
+    void $
+      Concurrent.forkIO (refreshLoop refreshIntervalMicroseconds)
+  where
+    refreshLoop refreshIntervalMicroseconds = do
+      Concurrent.threadDelay refreshIntervalMicroseconds
+      logInfo "running item cache refresh"
+      refreshResult <- refreshCacheEntry sessionKey
+      shouldContinue <-
+        modifyMVar agentStateVar $
+          \agentState -> pure $ handleRefreshResult sessionKey refreshResult agentState
+      logRefreshResult refreshResult shouldContinue
+      when shouldContinue $
+        refreshLoop refreshIntervalMicroseconds
+
+refreshCacheEntry :: (Bitwarden m, MonadTime m) => SessionKey -> m (Either CacheFillFailure CacheEntry)
+refreshCacheEntry sessionKey = do
+  listItemsResult <- listItems sessionKey
+  case listItemsResult of
+    Right items -> do
+      now <- currentTime
+      pure (Right (CacheEntry items now))
+    Left ListItemsUnavailable ->
+      pure (Left CacheFillUnavailable)
+    Left (ListItemsFailed err) ->
+      pure (Left (CacheFillFailed (sanitizeListItemsFailure sessionKey err)))
+
+initialItemCacheState :: Either CacheFillFailure CacheEntry -> ItemCacheState
+initialItemCacheState refreshResult =
+  case refreshResult of
+    Right cacheEntry ->
+      CacheReady cacheEntry LatestRefreshSucceeded
+    Left cacheFillFailure ->
+      CacheFillError cacheFillFailure
+
+handleRefreshResult :: SessionKey -> Either CacheFillFailure CacheEntry -> AgentState -> (AgentState, Bool)
+handleRefreshResult sessionKey refreshResult agentState =
+  case classifyRefreshOwnership sessionKey agentState of
+    RefreshWorkerOwnsSession currentSessionKey itemCacheState ->
+      ( Unlocked currentSessionKey (updateItemCacheState itemCacheState refreshResult),
+        True
+      )
+    RefreshWorkerNoLongerOwnsSession ->
+      (agentState, False)
+
+data RefreshOwnership
+  = RefreshWorkerOwnsSession SessionKey ItemCacheState
+  | RefreshWorkerNoLongerOwnsSession
+
+classifyRefreshOwnership :: SessionKey -> AgentState -> RefreshOwnership
+classifyRefreshOwnership sessionKey agentState =
+  case agentState of
+    Unlocked currentSessionKey itemCacheState
+      | currentSessionKey == sessionKey ->
+          RefreshWorkerOwnsSession currentSessionKey itemCacheState
+    _ -> RefreshWorkerNoLongerOwnsSession
+
+updateItemCacheState :: ItemCacheState -> Either CacheFillFailure CacheEntry -> ItemCacheState
+updateItemCacheState itemCacheState refreshResult =
+  case (itemCacheState, refreshResult) of
+    (_, Right cacheEntry) ->
+      CacheReady cacheEntry LatestRefreshSucceeded
+    (CacheReady cacheEntry _, Left cacheFillFailure) ->
+      CacheReady cacheEntry (LatestRefreshFailed cacheFillFailure)
+    (_, Left cacheFillFailure) ->
+      CacheFillError cacheFillFailure
+
+handleGetPassword :: Bitwarden m => SessionKey -> LoginItemId -> AgentState -> m (AgentState, Response, [Effect])
 handleGetPassword sessionKey loginItemId agentState = do
   result <- getPassword sessionKey loginItemId
   let response =
@@ -340,7 +505,7 @@ handleGetPassword sessionKey loginItemId agentState = do
             Failure (sanitizeGetPasswordFailure sessionKey err)
           Right password ->
             PasswordResult loginItemId password
-  pure (agentState, response)
+  pure (agentState, response, [])
 
 sanitizeUnlockError :: Password -> Text -> Text
 sanitizeUnlockError (Password password) err =
@@ -362,6 +527,18 @@ sanitizeGetPasswordFailure (SessionKey sessionKey) err =
         if T.null sessionKey then err else T.replace sessionKey "<redacted>" err
       trimmed = T.strip sanitized
    in if T.null trimmed then "bw get password failed" else trimmed
+
+logRefreshResult :: KatipContext m => Either CacheFillFailure CacheEntry -> Bool -> m ()
+logRefreshResult refreshResult shouldContinue =
+  case (refreshResult, shouldContinue) of
+    (Right _, True) ->
+      logInfo "item cache refresh succeeded"
+    (Left CacheFillUnavailable, True) ->
+      logInfo "item cache refresh failed: unavailable"
+    (Left (CacheFillFailed err), True) ->
+      logInfo ("item cache refresh failed: " <> err)
+    (_, False) ->
+      logInfo "stopping item cache refresh loop"
 
 generateTraceId :: IO Text
 generateTraceId = UUID.toText <$> nextRandom
@@ -386,3 +563,6 @@ logResponseSent response =
 
 socketNamespace :: Namespace
 socketNamespace = "socket"
+
+cacheRefreshNamespace :: Namespace
+cacheRefreshNamespace = "cache-refresh"
