@@ -265,6 +265,8 @@ pureStateTransitionTests =
         "handleRequestWith"
         [ testProperty "given a locked state, successful unlock action transitions state to unlocked" $
             propertyHandleRequestWithUnlockSuccess
+        , testProperty "given a locked state, a successful unlock with a failed initial item cache fill still returns unlocked and records the cache failure" $
+            propertyHandleRequestWithUnlockCacheFillFailure
         , testCase "given a locked state, a status request returns locked" $
             let currentState = Agent.Locked
                 (newState, response, effects) =
@@ -363,6 +365,22 @@ propertyHandleRequestWithUnlockSuccess sessionKey items =
           == Agent.Unlocked
             sessionKey
             (Agent.CacheReady (Agent.CacheEntry items mockNow) Agent.LatestRefreshSucceeded)
+          && response == Agent.Success "unlocked"
+          && effects == [Agent.StartCacheRefreshLoop sessionKey]
+
+propertyHandleRequestWithUnlockCacheFillFailure ::
+  Agent.SessionKey ->
+  Agent.ListItemsError ->
+  Property
+propertyHandleRequestWithUnlockCacheFillFailure sessionKey listItemsFailure =
+  let expectedCacheFailure =
+        Agent.cacheFillFailureFromListItemsError sessionKey listItemsFailure
+      (newState, response, effects) =
+        runMockBitwarden
+          (mkMockEnv (Right sessionKey) (Left listItemsFailure) (Left Bitwarden.GetPasswordUnavailable))
+          (Agent.handleRequestWith (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")) Agent.Locked)
+   in property $
+        newState == Agent.Unlocked sessionKey (Agent.CacheFillError expectedCacheFailure)
           && response == Agent.Success "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 
