@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+hwarden_fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+hwarden_require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || hwarden_fail "missing dependency: $1"
+}
+
+hwarden_require_runtime_dir() {
+  [ -n "${XDG_RUNTIME_DIR:-}" ] || hwarden_fail "XDG_RUNTIME_DIR is not set"
+}
+
+hwarden_socket_path() {
+  if [ -n "${HWARDEN_SOCKET_PATH:-}" ]; then
+    printf '%s\n' "$HWARDEN_SOCKET_PATH"
+    return 0
+  fi
+
+  hwarden_require_runtime_dir
+  printf '%s/hwarden/agent.sock\n' "$XDG_RUNTIME_DIR"
+}
+
+hwarden_bw_appdata_dir() {
+  hwarden_require_runtime_dir
+  printf '%s/hwarden/bitwarden-cli\n' "$XDG_RUNTIME_DIR"
+}
+
+hwarden_server_url() {
+  printf '%s\n' "${HWARDEN_SERVER_URL:-https://vault.bitwarden.eu}"
+}
+
+hwarden_prepare_runtime_dir() {
+  local dir_path=$1
+  mkdir -p "$dir_path"
+  chmod 700 "$dir_path"
+}
+
+hwarden_send_request() {
+  local request_json=$1
+  local socket_path
+
+  hwarden_require_cmd nc
+  socket_path=$(hwarden_socket_path)
+  if [ "${HWARDEN_SKIP_SOCKET_CHECK:-0}" != "1" ]; then
+    [ -S "$socket_path" ] || hwarden_fail "agent socket not found: $socket_path"
+  fi
+
+  printf '%s' "$request_json" | nc -N -U "$socket_path"
+}
+
+hwarden_response_ok() {
+  local response_json=$1
+  printf '%s' "$response_json" | jq -e '.ok == true' >/dev/null
+}
+
+hwarden_response_error() {
+  local response_json=$1
+  printf '%s' "$response_json" | jq -r '.error // "unknown error"'
+}
+
+hwarden_status_request() {
+  printf '{"cmd":"status"}'
+}
+
+hwarden_status_value() {
+  local response_json=$1
+  printf '%s' "$response_json" | jq -r '.message'
+}
+
+hwarden_unlock_request() {
+  local email=$1
+  local password=$2
+
+  jq -cn \
+    --arg email "$email" \
+    --arg password "$password" \
+    '
+      {
+        cmd: "unlock",
+        email: $email,
+        password: $password
+      }
+    '
+}
+
+hwarden_list_items_request() {
+  printf '{"cmd":"list-items"}'
+}
+
+hwarden_items_json() {
+  local response_json=$1
+  printf '%s' "$response_json" | jq -c '.items'
+}
+
+hwarden_filter_items_by_prefix() {
+  local items_json=$1
+  local prefix=$2
+
+  printf '%s' "$items_json" |
+    jq -c --arg prefix "$prefix" '
+      [ .[]
+        | select(((.name // "") | ascii_downcase) | startswith($prefix | ascii_downcase))
+      ]
+    '
+}
+
+hwarden_get_password_request() {
+  local item_id=$1
+  jq -cn --arg id "$item_id" '{cmd: "get-password", id: $id}'
+}
+
+hwarden_password_value() {
+  local response_json=$1
+  printf '%s' "$response_json" | jq -r '.password'
+}
+
+hwarden_rofi_input() {
+  local prompt=$1
+  printf '' | rofi -dmenu -p "$prompt"
+}
+
+hwarden_rofi_secret() {
+  local prompt=$1
+  printf '' | rofi -dmenu -password -p "$prompt"
+}
+
+hwarden_rofi_error() {
+  local message=$1
+  rofi -e "$message" >/dev/null 2>&1 || true
+}
+
+hwarden_rofi_notice_for() {
+  local message=$1
+  local duration_seconds=${2:-1}
+  local rofi_pid
+
+  rofi -e "$message" >/dev/null 2>&1 &
+  rofi_pid=$!
+
+  (
+    sleep "$duration_seconds"
+    kill "$rofi_pid" >/dev/null 2>&1 || true
+  ) &
+
+  wait "$rofi_pid" >/dev/null 2>&1 || true
+}
+
+hwarden_rofi_progress() {
+  local loading_message=$1
+  local done_message=$2
+  local failure_message=$3
+  local loading_pid
+  local command_status
+
+  shift 3
+
+  rofi -e "$loading_message" >/dev/null 2>&1 &
+  loading_pid=$!
+
+  if "$@"; then
+    command_status=0
+  else
+    command_status=$?
+  fi
+
+  kill "$loading_pid" >/dev/null 2>&1 || true
+  wait "$loading_pid" >/dev/null 2>&1 || true
+
+  if [ "$command_status" -eq 0 ]; then
+    hwarden_rofi_notice_for "$done_message" 1
+  else
+    hwarden_rofi_error "$failure_message"
+  fi
+
+  return "$command_status"
+}
+
+hwarden_require_rofi_dependencies() {
+  hwarden_require_cmd rofi
+  hwarden_require_cmd jq
+}
+
+hwarden_require_x11_clipboard() {
+  hwarden_require_cmd xclip
+}
