@@ -88,7 +88,11 @@ parsingTests =
               BS8.pack
                 "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
         Aeson.eitherDecodeStrict' payload
-          @?= Right (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+          @?= Right
+            ( Agent.UnlockRequest
+                (Agent.Username "me@example.com")
+                (Agent.Password "bad-password")
+            )
     , testCase "determineBitwardenServerUrl uses the EU default when unset" $
         Bitwarden.determineBitwardenServerUrl Nothing
           @?= Bitwarden.defaultBitwardenServerUrl
@@ -104,7 +108,18 @@ parsingTests =
             Bitwarden.BwItem 
               "1" 
               "Battle.net" 
-              (Just $ Bitwarden.BwLogin "skyvier")
+              (Just $ Bitwarden.BwLogin (Just "skyvier"))
+            ]
+    , testCase "bitwarden item parser tolerates null login username" $ do
+        let payload =
+              BS8.pack
+                "[{\"id\":\"1\",\"name\":\"Battle.net\",\"login\":{\"username\":null}}]"
+        Aeson.eitherDecodeStrict payload
+          @?= Right [
+            Bitwarden.BwItem
+              "1"
+              "Battle.net"
+              (Just $ Bitwarden.BwLogin Nothing)
             ]
     , testCase "bitwarden item parser decodes non-login items too" $ do
         let payload =
@@ -137,6 +152,13 @@ encodingTests =
     "encoding"
     [ testCase "success response encoding matches golden file" $
         assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
+    , testCase "unlock request encoding matches expected shape" $
+        Aeson.encode
+          ( Agent.UnlockRequest
+              (Agent.Username "me@example.com")
+              (Agent.Password "bad-password")
+          )
+          @?= "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
     , testCase "failure response encoding matches golden file" $
         assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
     , testCase "item-list response encoding matches golden file" $
