@@ -32,6 +32,7 @@ module Hwarden.Agent
     removeExistingSocket,
     runAgent,
     cacheAgeSeconds,
+    cacheFillFailureFromListItemsError,
     sanitizeUnlockError,
     updateItemCacheState
   )
@@ -360,7 +361,7 @@ handleRequestWith request agentState =
   case decide request agentState of
     Unlock username password ->
       handleUnlock username password
-    ListItemsAction _ cacheEntry ->
+    ListItemsAction cacheEntry ->
       handleListItems cacheEntry agentState
     GetPasswordAction sessionKey loginItemId ->
       handleGetPassword sessionKey loginItemId agentState
@@ -372,7 +373,7 @@ data Effect
 
 data Decision 
   = Unlock Username Password
-  | ListItemsAction SessionKey CacheEntry
+  | ListItemsAction CacheEntry
   | GetPasswordAction SessionKey LoginItemId
   | Reply Response
   deriving (Eq, Show)
@@ -389,7 +390,7 @@ decide Status agentState =
 decide ListItems agentState =
   case agentState of
     Locked -> Reply (Failure "locked")
-    Unlocked sessionKey (CacheReady cacheEntry _) -> ListItemsAction sessionKey cacheEntry
+    Unlocked _ (CacheReady cacheEntry _) -> ListItemsAction cacheEntry
     Unlocked _ _ -> Reply (Failure "item cache unavailable")
 decide (GetPasswordRequest loginItemId) agentState =
   case agentState of
@@ -459,10 +460,8 @@ refreshCacheEntry sessionKey = do
     Right items -> do
       now <- currentTime
       pure (Right (CacheEntry items now))
-    Left ListItemsUnavailable ->
-      pure (Left CacheFillUnavailable)
-    Left (ListItemsFailed err) ->
-      pure (Left (CacheFillFailed (sanitizeListItemsFailure sessionKey err)))
+    Left listItemsFailure ->
+      pure (Left (cacheFillFailureFromListItemsError sessionKey listItemsFailure))
 
 initialItemCacheState :: Either CacheFillFailure CacheEntry -> ItemCacheState
 initialItemCacheState refreshResult =
@@ -471,6 +470,14 @@ initialItemCacheState refreshResult =
       CacheReady cacheEntry LatestRefreshSucceeded
     Left cacheFillFailure ->
       CacheFillError cacheFillFailure
+
+cacheFillFailureFromListItemsError :: SessionKey -> ListItemsError -> CacheFillFailure
+cacheFillFailureFromListItemsError sessionKey listItemsFailure =
+  case listItemsFailure of
+    ListItemsUnavailable ->
+      CacheFillUnavailable
+    ListItemsFailed err ->
+      CacheFillFailed (sanitizeListItemsFailure sessionKey err)
 
 handleRefreshResult :: SessionKey -> Either CacheFillFailure CacheEntry -> AgentState -> (AgentState, Bool)
 handleRefreshResult sessionKey refreshResult agentState =
