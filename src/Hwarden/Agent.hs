@@ -114,6 +114,16 @@ data Request
   | UnknownRequest
   deriving (Eq, Show)
 
+instance Arbitrary Request where
+  arbitrary =
+    oneof
+      [ UnlockRequest <$> arbitrary <*> arbitrary,
+        pure Status,
+        pure ListItems,
+        GetPasswordRequest <$> arbitrary,
+        pure UnknownRequest
+      ]
+
 data Response
   = Success Text
   | ItemList [ItemSummary] CacheAgeSeconds
