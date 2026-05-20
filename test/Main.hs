@@ -322,8 +322,6 @@ pureStateTransitionTests =
         "handleListItems"
         [ testProperty "given any initial state, handleListItems never changes the agent state" $
             propertyHandleListItemsPreservesState
-        , testProperty "given a cached item list, handleListItems reports the cache age derived from the cache entry" $
-            propertyHandleListItemsReportsCacheAge
         , testProperty "given a cache entry refreshed N seconds ago, handleListItems reports age N exactly" $
             propertyHandleListItemsReportsExactCacheAge
         ]
@@ -662,22 +660,6 @@ propertyHandleListItemsPreservesState cacheEntry initialState =
           (mkMockEnv (Left Agent.UnlockUnavailable) (Right []) (Left Bitwarden.GetPasswordUnavailable))
           (Agent.handleListItems cacheEntry initialState)
    in property (newState == initialState && effects == [])
-
-propertyHandleListItemsReportsCacheAge ::
-  Agent.CacheEntry ->
-  Agent.AgentState ->
-  Property
-propertyHandleListItemsReportsCacheAge cacheEntry initialState =
-  let (_, response, effects) =
-        runMockBitwarden
-          (mkMockEnv (Left Agent.UnlockUnavailable) (Right []) (Left Bitwarden.GetPasswordUnavailable))
-          (Agent.handleListItems cacheEntry initialState)
-   in property $
-        response
-          == Agent.ItemList
-            (Agent.cacheEntryItems cacheEntry)
-            (Agent.cacheAgeSeconds mockNow cacheEntry)
-          && null effects
 
 propertyHandleListItemsReportsExactCacheAge ::
   [Agent.ItemSummary] ->
