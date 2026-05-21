@@ -2,14 +2,23 @@
 
 Tiny Haskell daemon for one job: accept a local Unix socket JSON request, unlock Bitwarden via `bw login ... --raw`, and expose a small local API backed by the in-memory `BW_SESSION`.
 
-## Run
+## Prerequisites
 
-`XDG_RUNTIME_DIR` must be set.
+- `cabal` and a compatible GHC toolchain
+- Bitwarden CLI available as `bw`
+- `nc` for the manual socket examples below
+- `XDG_RUNTIME_DIR` set in the environment
+
+## Run
 
 Optional:
 
 - `HWARDEN_SERVER_URL`
   Defaults to `https://vault.bitwarden.eu`.
+- `HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS`
+  Defaults to `60`. Must be a positive integer; invalid or non-positive
+  values fall back to `60`. Controls the in-memory item list refresh interval
+  after unlock.
 
 ```sh
 cabal run hwarden-agent
@@ -28,6 +37,23 @@ The agent keeps its Bitwarden CLI state in its own isolated profile under
 `$XDG_RUNTIME_DIR/hwarden/bitwarden-cli`, so it does not share the user's
 default `bw` state. This isolated profile is session-scoped and is not expected
 to persist across reboot.
+
+## Protocol
+
+Clients connect to `$XDG_RUNTIME_DIR/hwarden/agent.sock`, send one JSON object,
+close the write side of the connection, and then read one JSON response. Closing
+the write side is required because the agent reads until EOF before decoding the
+request.
+
+| Command | Request fields | Success response | Common failure response |
+| --- | --- | --- | --- |
+| `unlock` | `cmd`, `email`, `password` | `{"ok":true,"message":"unlocked"}` or `{"ok":true,"message":"already unlocked"}` | `{"ok":false,"error":"..."}` |
+| `status` | `cmd` | `{"ok":true,"message":"locked"}` or `{"ok":true,"message":"unlocked"}` | n/a |
+| `list-items` | `cmd` | `{"ok":true,"items":[...],"cache_age_seconds":0}` | `{"ok":false,"error":"locked"}` or `{"ok":false,"error":"item cache unavailable"}` |
+| `get-password` | `cmd`, `id` | `{"ok":true,"id":"...","password":"..."}` | `{"ok":false,"error":"locked"}` or `{"ok":false,"error":"..."}` |
+
+Bad JSON returns `{"ok":false,"error":"..."}`. Unknown commands return
+`{"ok":false,"error":"unknown request"}`.
 
 ## Manual testing with nc
 
