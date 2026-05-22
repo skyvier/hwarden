@@ -127,6 +127,25 @@ parsingTests =
     , testCase "parseBitwardenCliPath fails when the path is empty" $
         App.parseBitwardenCliPath (Just "")
           @?= Left "HWARDEN_BW_PATH is empty"
+    , testCase "validateBitwardenCliPath accepts an executable file" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let cliPath = root </> "bw"
+        BS.writeFile cliPath ""
+        setFileMode cliPath 0o700
+        validationResult <- App.validateBitwardenCliPath cliPath
+        removeDirectoryRecursive root
+        validationResult @?= Right cliPath
+    , testCase "validateBitwardenCliPath fails when the path does not exist" $
+        App.validateBitwardenCliPath "/definitely/missing/bw"
+          >>= (@?= Left "HWARDEN_BW_PATH does not exist")
+    , testCase "validateBitwardenCliPath fails when the path is not executable" $ do
+        root <- createTempDir "hwarden-agent-test"
+        let cliPath = root </> "bw"
+        BS.writeFile cliPath ""
+        setFileMode cliPath 0o600
+        validationResult <- App.validateBitwardenCliPath cliPath
+        removeDirectoryRecursive root
+        validationResult @?= Left "HWARDEN_BW_PATH is not executable"
     , testCase "bitwarden item parser decodes a login item" $ do
         let payload =
               BS8.pack
