@@ -6,6 +6,7 @@ module Hwarden.App
   ( AgentT (..),
     Env (..),
     initAgentEnv,
+    parseBitwardenCliPath,
     runAgentT,
   )
 where
@@ -51,6 +52,7 @@ data Env = Env
   { envLogEnv :: LogEnv,
     envLogContexts :: LogContexts,
     envNamespace :: Namespace,
+    envBitwardenCliPath :: FilePath,
     envBitwardenCliAppDataDir :: FilePath,
     envBitwardenServerUrl :: Text,
     envCacheRefreshIntervalSeconds :: Int
@@ -83,6 +85,7 @@ instance MonadTime AgentT where
   monotonicTime = liftIO MonadTime.monotonicTime
 
 instance HasBitwardenCliConfig Env where
+  bitwardenCliPath = envBitwardenCliPath
   bitwardenCliAppDataDir = envBitwardenCliAppDataDir
   bitwardenServerUrl = envBitwardenServerUrl
 
@@ -94,6 +97,9 @@ initAgentEnv :: FilePath -> IO Env
 initAgentEnv runtimeDir = do
   let isolatedBitwardenCliAppDataDir =
         Runtime.bitwardenCliAppDataDir (Runtime.deriveAgentPaths runtimeDir)
+  cliPathValue <- lookupEnv "HWARDEN_BW_PATH"
+  configuredBitwardenCliPath <-
+    either fail pure (parseBitwardenCliPath cliPathValue)
   serverUrl <- lookupEnv "HWARDEN_SERVER_URL"
   cacheRefreshIntervalSeconds <-
     maybe defaultCacheRefreshIntervalSeconds parseCacheRefreshIntervalSeconds
@@ -104,6 +110,7 @@ initAgentEnv runtimeDir = do
       logEnv
       mempty
       "hwarden-agent"
+      configuredBitwardenCliPath
       isolatedBitwardenCliAppDataDir
       (determineBitwardenServerUrl serverUrl)
       cacheRefreshIntervalSeconds
@@ -122,3 +129,10 @@ parseCacheRefreshIntervalSeconds value =
   case readMaybe value of
     Just intervalSeconds | intervalSeconds > 0 -> intervalSeconds
     _ -> defaultCacheRefreshIntervalSeconds
+
+parseBitwardenCliPath :: Maybe FilePath -> Either String FilePath
+parseBitwardenCliPath maybeCliPath =
+  case maybeCliPath of
+    Nothing -> Left "HWARDEN_BW_PATH is not set"
+    Just "" -> Left "HWARDEN_BW_PATH is empty"
+    Just cliPath -> Right cliPath

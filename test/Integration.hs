@@ -64,8 +64,13 @@ data BwBehavior = BwBehavior
     getPasswordBehavior :: CommandBehavior
   }
 
+data BwPathMode
+  = UseFakeBwPath
+  | OmitBwPath
+
 data AgentConfig = AgentConfig
   { agentBwBehavior :: BwBehavior,
+    agentBwPathMode :: BwPathMode,
     agentServerUrlOverride :: Maybe String,
     agentRefreshIntervalSecondsOverride :: Maybe Int
   }
@@ -138,6 +143,17 @@ integrationTests =
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandFails "config failed"
                     }
+              }
+        exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
+        exitCode <- waitForProcess (processHandle agent)
+        removeDirectoryRecursive (tempRoot agent)
+        assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
+        assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
+    , testCase "agent startup fails before creating the socket when HWARDEN_BW_PATH is missing" $ do
+        agent <-
+          spawnConfiguredAgent
+            defaultAgentConfig
+              { agentBwPathMode = OmitBwPath
               }
         exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
         exitCode <- waitForProcess (processHandle agent)
@@ -433,18 +449,20 @@ spawnConfiguredAgent agentConfig = do
   tmpDir <- createTempDir "hwarden-agent-test"
   let paths = Runtime.deriveAgentPaths (tmpDir </> "runtime")
       fakeBinDir = tmpDir </> "bin"
+      fakeBwPath = fakeBinDir </> "bw"
       serverUrl = determineBitwardenServerUrl (agentServerUrlOverride agentConfig)
   createDirectoryIfMissing True (Runtime.runtimeDir paths)
   createDirectoryIfMissing True fakeBinDir
   writeFakeBw
-    fakeBinDir
+    fakeBwPath
+    fakeBwPath
     (Runtime.bitwardenCliAppDataDir paths)
     (T.unpack serverUrl)
     (agentBwBehavior agentConfig)
   hwardenAgent <- requireExecutable "hwarden-agent"
   bwReal <- requireExecutable "bw"
   baseEnv <- getEnvironment
-  let pathValue = fakeBinDir <> ":" <> takeDirectory bwReal
+  let pathValue = takeDirectory bwReal
       applyServerUrlOverride =
         maybe id
           (setEnvVar "HWARDEN_SERVER_URL")
@@ -453,9 +471,15 @@ spawnConfiguredAgent agentConfig = do
         maybe id
           (setEnvVar "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS" . show)
           (agentRefreshIntervalSecondsOverride agentConfig)
+      applyBwPathMode =
+        case agentBwPathMode agentConfig of
+          UseFakeBwPath -> setEnvVar "HWARDEN_BW_PATH" fakeBwPath
+          OmitBwPath -> id
       agentBaseEnv =
-        setEnvVar "PATH" pathValue
+        applyBwPathMode
+          (setEnvVar "PATH" pathValue
           (setEnvVar "XDG_RUNTIME_DIR" (Runtime.runtimeDir paths) baseEnv)
+          )
       agentEnv = applyRefreshIntervalOverride (applyServerUrlOverride agentBaseEnv)
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   pure
@@ -504,19 +528,22 @@ sendRequest agentSocketPath request =
       connect conn (SockAddrUnix agentSocketPath)
       pure conn
 
-writeFakeBw :: FilePath -> FilePath -> String -> BwBehavior -> IO ()
-writeFakeBw fakeBinDir expectedAppDataDir expectedServerUrl bwBehavior = do
-  let fakeBw = fakeBinDir </> "bw"
+writeFakeBw :: FilePath -> FilePath -> FilePath -> String -> BwBehavior -> IO ()
+writeFakeBw fakeBw expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior = do
   BS8.writeFile
     fakeBw
-    (scriptFor expectedAppDataDir expectedServerUrl bwBehavior)
+    (scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior)
   permissions <- getPermissions fakeBw
   setPermissions fakeBw permissions {executable = True}
 
-scriptFor :: FilePath -> String -> BwBehavior -> BS8.ByteString
-scriptFor expectedAppDataDir expectedServerUrl bwBehavior =
+scriptFor :: FilePath -> FilePath -> String -> BwBehavior -> BS8.ByteString
+scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior =
   BS8.unlines
     [ "#!/bin/sh",
+      "if [ \"$0\" != \"" <> BS8.pack expectedExecutablePath <> "\" ]; then",
+      "  printf '%s\\n' 'bw executable path did not match HWARDEN_BW_PATH' 1>&2",
+      "  exit 1",
+      "fi",
       "if [ -z \"$BITWARDENCLI_APPDATA_DIR\" ]; then",
       "  printf '%s\\n' 'BITWARDENCLI_APPDATA_DIR was not set' 1>&2",
       "  exit 1",
@@ -669,6 +696,7 @@ defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
   AgentConfig
     { agentBwBehavior = defaultFailingBw,
+      agentBwPathMode = UseFakeBwPath,
       agentServerUrlOverride = Nothing,
       agentRefreshIntervalSecondsOverride = Nothing
     }
