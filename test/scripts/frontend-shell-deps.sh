@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 
 nix-shell --pure "$ROOT_DIR/shell.nix" --run '
   set -euo pipefail
