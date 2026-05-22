@@ -404,6 +404,8 @@ handleUnlock email password = do
   case result of
     Left UnlockUnavailable ->
       pure (Locked, Failure "bw login failed", [])
+    Left CodeRequired ->
+      pure (Locked, Failure "two-factor code required; run scripts/hwarden-first-login", [])
     Left (UnlockFailed err) ->
       pure (Locked, Failure (sanitizeUnlockError password err), [])
     Right sessionKey -> do
