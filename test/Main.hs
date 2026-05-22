@@ -13,6 +13,7 @@ import qualified Data.Text.Encoding as TE
 import Data.Time.Clock (UTCTime, addUTCTime)
 import Integration (integrationTests)
 import qualified Hwarden.Agent as Agent
+import qualified Hwarden.App as App
 import qualified Hwarden.Bitwarden as Bitwarden
 import System.Directory
   ( createDirectoryIfMissing,
@@ -117,6 +118,15 @@ parsingTests =
     , testCase "determineBitwardenServerUrl uses the override when set" $
         Bitwarden.determineBitwardenServerUrl (Just "https://vault.example.test")
           @?= "https://vault.example.test"
+    , testCase "parseBitwardenCliPath returns the configured path" $
+        App.parseBitwardenCliPath (Just "/nix/store/test-bw/bin/bw")
+          @?= Right "/nix/store/test-bw/bin/bw"
+    , testCase "parseBitwardenCliPath fails when the path is missing" $
+        App.parseBitwardenCliPath Nothing
+          @?= Left "HWARDEN_BW_PATH is not set"
+    , testCase "parseBitwardenCliPath fails when the path is empty" $
+        App.parseBitwardenCliPath (Just "")
+          @?= Left "HWARDEN_BW_PATH is empty"
     , testCase "bitwarden item parser decodes a login item" $ do
         let payload =
               BS8.pack

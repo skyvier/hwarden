@@ -51,6 +51,7 @@ newtype RealBitwardenT r m a = RealBitwardenT
   deriving (Functor, Applicative, Monad, MonadIO, Katip, KatipContext, MonadReader r)
 
 class HasBitwardenCliConfig r where
+  bitwardenCliPath :: r -> FilePath
   bitwardenCliAppDataDir :: r -> FilePath
   bitwardenServerUrl :: r -> Text
 
@@ -129,8 +130,9 @@ isolatedBwProcess ::
   [String] ->
   m CreateProcess
 isolatedBwProcess args = do
+  cliPath <- asks bitwardenCliPath
   isolatedEnv <- isolatedBwEnv
-  pure (proc "bw" args) {env = Just isolatedEnv}
+  pure (proc cliPath args) {env = Just isolatedEnv}
 
 authenticatedBwProcess ::
   (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
@@ -138,9 +140,10 @@ authenticatedBwProcess ::
   [String] ->
   m CreateProcess
 authenticatedBwProcess (SessionKey rawSessionKey) args = do
+  cliPath <- asks bitwardenCliPath
   isolatedEnv <- isolatedBwEnv
   pure
-    (proc "bw" args)
+    (proc cliPath args)
       { env = Just (setEnvVar "BW_SESSION" (T.unpack rawSessionKey) isolatedEnv)
       }
 
