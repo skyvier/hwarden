@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+REPO_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
