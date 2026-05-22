@@ -67,7 +67,11 @@ hpkgs.shellFor {
   packages = p: [ hwardenAgent ];
   nativeBuildInputs = [
     pkgs.cabal-install
+    pkgs.jq
+    pkgs.netcat-openbsd
+    pkgs.rofi
     pkgs.socat
+    pkgs.xclip
     bitwardenCli
     wrappedHwardenAgent
   ];

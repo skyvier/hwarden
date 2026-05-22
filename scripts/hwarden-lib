@@ -34,6 +34,15 @@ hwarden_server_url() {
   printf '%s\n' "${HWARDEN_SERVER_URL:-https://vault.bitwarden.eu}"
 }
 
+hwarden_bw_cli_path() {
+  local cli_path=${HWARDEN_BW_PATH:-}
+
+  [ -n "$cli_path" ] || hwarden_fail "HWARDEN_BW_PATH is not set"
+  [ -x "$cli_path" ] || hwarden_fail "HWARDEN_BW_PATH is not executable: $cli_path"
+
+  printf '%s\n' "$cli_path"
+}
+
 hwarden_prepare_runtime_dir() {
   local dir_path=$1
   mkdir -p "$dir_path"

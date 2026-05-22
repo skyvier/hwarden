@@ -19,8 +19,8 @@ exit 0
 EOF
 chmod +x "$TMP_DIR/bw"
 
-export PATH="$TMP_DIR:$PATH"
 export BW_LOG
+export HWARDEN_BW_PATH="$TMP_DIR/bw"
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 
 "$ROOT_DIR/scripts/hwarden-first-login"

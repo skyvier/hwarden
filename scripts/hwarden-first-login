@@ -6,19 +6,18 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=scripts/hwarden-lib
 source "$SCRIPT_DIR/hwarden-lib"
 
-hwarden_require_cmd bw
-
 appdata_dir=$(hwarden_bw_appdata_dir)
+bw_cli=$(hwarden_bw_cli_path)
 server_url=$(hwarden_server_url)
 
 hwarden_prepare_runtime_dir "$appdata_dir"
 
 cleanup() {
-  BITWARDENCLI_APPDATA_DIR="$appdata_dir" bw logout >/dev/null 2>&1 || true
+  BITWARDENCLI_APPDATA_DIR="$appdata_dir" "$bw_cli" logout >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT
 
-BITWARDENCLI_APPDATA_DIR="$appdata_dir" bw logout >/dev/null 2>&1 || true
-BITWARDENCLI_APPDATA_DIR="$appdata_dir" bw config server "$server_url"
-BITWARDENCLI_APPDATA_DIR="$appdata_dir" bw login
+BITWARDENCLI_APPDATA_DIR="$appdata_dir" "$bw_cli" logout >/dev/null 2>&1 || true
+BITWARDENCLI_APPDATA_DIR="$appdata_dir" "$bw_cli" config server "$server_url"
+BITWARDENCLI_APPDATA_DIR="$appdata_dir" "$bw_cli" login
