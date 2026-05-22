@@ -76,6 +76,7 @@ hpkgs.shellFor {
     wrappedHwardenAgent
   ];
   shellHook = ''
+    export HWARDEN_BW_PATH="${bitwardenCli}/bin/bw"
     export PATH="${wrappedHwardenAgent}/bin:$PATH"
   '';
 }

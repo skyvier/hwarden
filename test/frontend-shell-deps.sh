@@ -7,6 +7,7 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 nix-shell --pure "$ROOT_DIR/shell.nix" --run '
   set -euo pipefail
 
+  [ "${HWARDEN_BW_PATH:-}" = "$(command -v bw)" ]
   command -v hwarden-agent >/dev/null
   command -v bw >/dev/null
   command -v jq >/dev/null
