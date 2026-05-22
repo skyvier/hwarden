@@ -28,16 +28,14 @@ import System.Directory
   ( Permissions (executable),
     createDirectoryIfMissing,
     doesFileExist,
-    findExecutable,
     getPermissions,
-    getTemporaryDirectory,
     removeDirectoryRecursive,
     removeFile,
     setPermissions
   )
-import System.Environment (getEnvironment)
+import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.Process
   ( CreateProcess (cwd, env, std_err, std_out),
@@ -46,11 +44,13 @@ import System.Process
     createProcess,
     getProcessExitCode,
     proc,
+    readProcess,
+    readCreateProcessWithExitCode,
     terminateProcess,
     waitForProcess
   )
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
+import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 
 data CommandBehavior
   = CommandSucceeds BS8.ByteString
@@ -71,6 +71,7 @@ data BwPathMode
 data AgentConfig = AgentConfig
   { agentBwBehavior :: BwBehavior,
     agentBwPathMode :: BwPathMode,
+    agentPathOverride :: Maybe String,
     agentServerUrlOverride :: Maybe String,
     agentRefreshIntervalSecondsOverride :: Maybe Int
   }
@@ -160,6 +161,52 @@ integrationTests =
         removeDirectoryRecursive (tempRoot agent)
         assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
         assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
+    , testCase "agent env can set an empty PATH while still injecting HWARDEN_BW_PATH" $ do
+        let envVars =
+              buildAgentEnv
+                defaultAgentConfig {agentPathOverride = Just ""}
+                "/tmp/runtime"
+                "/tmp/fake-bw"
+                [("PATH", "/bin:/usr/bin")]
+        lookup "HWARDEN_BW_PATH" envVars @?= Just "/tmp/fake-bw"
+        lookup "PATH" envVars @?= Just ""
+    , testCase "agent executable lookup honors HWARDEN_AGENT_TEST_EXE when PATH is empty" $ do
+        tempDir <- createTempDir "hwarden-agent-exe"
+        let fakeAgentPath = tempDir </> "hwarden-agent"
+        BS8.writeFile fakeAgentPath "#!/bin/sh\nexit 0\n"
+        permissions <- getPermissions fakeAgentPath
+        setPermissions fakeAgentPath permissions {executable = True}
+        executablePath <-
+          withEnvVarOverride "PATH" (Just "") $
+            withEnvVarOverride "HWARDEN_AGENT_TEST_EXE" (Just fakeAgentPath) $
+              requireAgentExecutable
+        removeDirectoryRecursive tempDir
+        executablePath @?= fakeAgentPath
+    , testCase "agent executable lookup falls back to cabal list-bin instead of PATH" $ do
+        executablePath <-
+          requireAgentExecutableWith
+            (pure Nothing)
+            (pure "/tmp/from-cabal/hwarden-agent")
+        executablePath @?= "/tmp/from-cabal/hwarden-agent"
+    , testCase "hwarden-agent version prints HWARDEN_VERSION and exits" $ do
+        hwardenAgent <- requireAgentExecutable
+        let versionEnv = [("HWARDEN_VERSION", "test-hash-123")]
+        (exitCode, stdoutText, stderrText) <-
+          readCreateProcessWithExitCode
+            ((proc hwardenAgent ["version"]) {env = Just versionEnv})
+            ""
+        exitCode @?= ExitSuccess
+        stdoutText @?= "test-hash-123\n"
+        stderrText @?= ""
+    , testCase "hwarden-agent version prints unknown when HWARDEN_VERSION is unset" $ do
+        hwardenAgent <- requireAgentExecutable
+        (exitCode, stdoutText, stderrText) <-
+          readCreateProcessWithExitCode
+            ((proc hwardenAgent ["version"]) {env = Just []})
+            ""
+        exitCode @?= ExitSuccess
+        stdoutText @?= "unknown\n"
+        stderrText @?= ""
 
     , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ do
         agent <- setupAgent defaultAgentConfig
@@ -455,32 +502,17 @@ spawnConfiguredAgent agentConfig = do
   createDirectoryIfMissing True fakeBinDir
   writeFakeBw
     fakeBwPath
-    fakeBwPath
     (Runtime.bitwardenCliAppDataDir paths)
     (T.unpack serverUrl)
     (agentBwBehavior agentConfig)
-  hwardenAgent <- requireExecutable "hwarden-agent"
-  bwReal <- requireExecutable "bw"
+  hwardenAgent <- requireAgentExecutable
   baseEnv <- getEnvironment
-  let pathValue = takeDirectory bwReal
-      applyServerUrlOverride =
-        maybe id
-          (setEnvVar "HWARDEN_SERVER_URL")
-          (agentServerUrlOverride agentConfig)
-      applyRefreshIntervalOverride =
-        maybe id
-          (setEnvVar "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS" . show)
-          (agentRefreshIntervalSecondsOverride agentConfig)
-      applyBwPathMode =
-        case agentBwPathMode agentConfig of
-          UseFakeBwPath -> setEnvVar "HWARDEN_BW_PATH" fakeBwPath
-          OmitBwPath -> id
-      agentBaseEnv =
-        applyBwPathMode
-          (setEnvVar "PATH" pathValue
-          (setEnvVar "XDG_RUNTIME_DIR" (Runtime.runtimeDir paths) baseEnv)
-          )
-      agentEnv = applyRefreshIntervalOverride (applyServerUrlOverride agentBaseEnv)
+  let agentEnv =
+        buildAgentEnv
+          agentConfig
+          (Runtime.runtimeDir paths)
+          fakeBwPath
+          baseEnv
   handle <- spawnAgent hwardenAgent tmpDir agentEnv
   pure
     AgentResource
@@ -528,11 +560,11 @@ sendRequest agentSocketPath request =
       connect conn (SockAddrUnix agentSocketPath)
       pure conn
 
-writeFakeBw :: FilePath -> FilePath -> FilePath -> String -> BwBehavior -> IO ()
-writeFakeBw fakeBw expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior = do
+writeFakeBw :: FilePath -> FilePath -> String -> BwBehavior -> IO ()
+writeFakeBw fakeBw expectedAppDataDir expectedServerUrl bwBehavior = do
   BS8.writeFile
     fakeBw
-    (scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior)
+    (scriptFor fakeBw expectedAppDataDir expectedServerUrl bwBehavior)
   permissions <- getPermissions fakeBw
   setPermissions fakeBw permissions {executable = True}
 
@@ -697,6 +729,7 @@ defaultAgentConfig =
   AgentConfig
     { agentBwBehavior = defaultFailingBw,
       agentBwPathMode = UseFakeBwPath,
+      agentPathOverride = Nothing,
       agentServerUrlOverride = Nothing,
       agentRefreshIntervalSecondsOverride = Nothing
     }
@@ -781,21 +814,88 @@ matchesExpectedItems expectedItems response =
     Agent.ItemList actualItems _ -> actualItems == expectedItems
     _ -> False
 
-requireExecutable :: String -> IO FilePath
-requireExecutable name = do
-  path <- findExecutable name
-  case path of
+requireAgentExecutable :: IO FilePath
+requireAgentExecutable =
+  requireAgentExecutableWith
+    (lookupEnv "HWARDEN_AGENT_TEST_EXE")
+    requireAgentExecutableFromCabal
+
+requireAgentExecutableWith ::
+  IO (Maybe FilePath) ->
+  IO FilePath ->
+  IO FilePath
+requireAgentExecutableWith lookupExplicitPath requireFromCabal = do
+  explicitPath <- lookupExplicitPath
+  case explicitPath of
     Just executablePath -> pure executablePath
-    Nothing -> fail ("missing executable in PATH: " <> name)
+    Nothing -> requireFromCabal
+
+requireAgentExecutableFromCabal :: IO FilePath
+requireAgentExecutableFromCabal = do
+  executablePath <- trimTrailingNewline <$> readProcess "cabal" ["list-bin", "hwarden-agent"] ""
+  if null executablePath
+    then fail "cabal list-bin returned an empty path for hwarden-agent"
+    else pure executablePath
+
+trimTrailingNewline :: String -> String
+trimTrailingNewline = reverse . dropWhile (== '\n') . reverse
+
+withEnvVarOverride :: String -> Maybe String -> IO a -> IO a
+withEnvVarOverride key newValue action = do
+  oldValue <- lookupEnv key
+  bracket
+    (setOverride key newValue)
+    (\() -> restoreOverride key oldValue)
+    (\() -> action)
+  where
+    setOverride envKey value =
+      case value of
+        Just envValue -> setEnv envKey envValue
+        Nothing -> unsetEnv envKey
+    restoreOverride envKey value =
+      case value of
+        Just envValue -> setEnv envKey envValue
+        Nothing -> unsetEnv envKey
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
 
+buildAgentEnv ::
+  AgentConfig ->
+  FilePath ->
+  FilePath ->
+  [(String, String)] ->
+  [(String, String)]
+buildAgentEnv agentConfig runtimeDir fakeBwPath =
+  applyRefreshIntervalOverride
+    . applyServerUrlOverride
+    . applyPathOverride
+    . applyBwPathMode
+    . setEnvVar "XDG_RUNTIME_DIR" runtimeDir
+  where
+    applyServerUrlOverride =
+      maybe id
+        (setEnvVar "HWARDEN_SERVER_URL")
+        (agentServerUrlOverride agentConfig)
+    applyRefreshIntervalOverride =
+      maybe id
+        (setEnvVar "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS" . show)
+        (agentRefreshIntervalSecondsOverride agentConfig)
+    applyBwPathMode =
+      case agentBwPathMode agentConfig of
+        UseFakeBwPath -> setEnvVar "HWARDEN_BW_PATH" fakeBwPath
+        OmitBwPath -> id
+    applyPathOverride =
+      maybe id (setEnvVar "PATH") (agentPathOverride agentConfig)
+
 createTempDir :: String -> IO FilePath
 createTempDir prefix = do
-  tempBase <- getTemporaryDirectory
+  tempBase <- shortTempDirectory
   (tempPath, tempHandle) <- openTempFile tempBase prefix
   hClose tempHandle
   removeFile tempPath
   createDirectoryIfMissing True tempPath
   pure tempPath
+
+shortTempDirectory :: IO FilePath
+shortTempDirectory = pure ("/tmp" :: FilePath)

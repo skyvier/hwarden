@@ -8,6 +8,7 @@ module Hwarden.App
     initAgentEnv,
     parseBitwardenCliPath,
     runAgentT,
+    validateBitwardenCliPath,
   )
 where
 
@@ -42,6 +43,7 @@ import Katip
     permitItem,
     registerScribe
   )
+import System.Directory (doesFileExist, executable, getPermissions)
 import System.Environment (lookupEnv)
 import System.IO (stdout)
 import Text.Read (readMaybe)
@@ -100,6 +102,8 @@ initAgentEnv runtimeDir = do
   cliPathValue <- lookupEnv "HWARDEN_BW_PATH"
   configuredBitwardenCliPath <-
     either fail pure (parseBitwardenCliPath cliPathValue)
+      >>= validateBitwardenCliPath
+      >>= either fail pure
   serverUrl <- lookupEnv "HWARDEN_SERVER_URL"
   cacheRefreshIntervalSeconds <-
     maybe defaultCacheRefreshIntervalSeconds parseCacheRefreshIntervalSeconds
@@ -136,3 +140,14 @@ parseBitwardenCliPath maybeCliPath =
     Nothing -> Left "HWARDEN_BW_PATH is not set"
     Just "" -> Left "HWARDEN_BW_PATH is empty"
     Just cliPath -> Right cliPath
+
+validateBitwardenCliPath :: FilePath -> IO (Either String FilePath)
+validateBitwardenCliPath cliPath = do
+  pathExists <- doesFileExist cliPath
+  if not pathExists
+    then pure (Left "HWARDEN_BW_PATH does not exist")
+    else do
+      permissions <- getPermissions cliPath
+      if executable permissions
+        then pure (Right cliPath)
+        else pure (Left "HWARDEN_BW_PATH is not executable")

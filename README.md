@@ -1,18 +1,40 @@
 # hwarden-agent
 
-Tiny Haskell daemon for one job: accept a local Unix socket JSON request, unlock Bitwarden via `bw login ... --raw`, and expose a small local API backed by the in-memory `BW_SESSION`.
+Tiny Haskell daemon for one job: accept a local Unix socket JSON request,
+unlock Bitwarden via the configured Bitwarden CLI executable, and expose a
+small local API backed by the in-memory `BW_SESSION`.
 
 ## Prerequisites
 
 - `cabal` and a compatible GHC toolchain
-- Bitwarden CLI available as `bw`
 - `nc` for the manual socket examples below
 - `XDG_RUNTIME_DIR` set in the environment
 
+## Runtime contract
+
+`hwarden-agent` requires an explicit Bitwarden CLI path via
+`HWARDEN_BW_PATH`.
+
+For the pinned Nix workflow in this repository, use `shell.nix`:
+
+```sh
+nix-shell
+```
+
+That shell pins `nixpkgs`, puts the wrapped `hwarden-agent` first on `PATH`,
+and the wrapper sets `HWARDEN_BW_PATH` to the pinned Bitwarden CLI at runtime.
+Inside the shell, running `hwarden-agent` uses that wrapped executable.
+
+Outside Nix, set `HWARDEN_BW_PATH` yourself before starting the daemon. Having
+some `bw` on `PATH` is not sufficient.
+
 ## Run
 
-Optional:
+Environment:
 
+- `HWARDEN_BW_PATH`
+  Required outside the pinned Nix shell. Must point to the `bw` executable to
+  run for Bitwarden CLI commands.
 - `HWARDEN_SERVER_URL`
   Defaults to `https://vault.bitwarden.eu`.
 - `HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS`
@@ -23,6 +45,21 @@ Optional:
 ```sh
 cabal run hwarden-agent
 ```
+
+In the pinned Nix shell, you can also run the wrapped executable directly:
+
+```sh
+hwarden-agent
+```
+
+To print the wrapped build revision:
+
+```sh
+hwarden-agent version
+```
+
+In the pinned Nix shell this prints the injected short git hash. Outside that
+wrapper context it falls back to `unknown`.
 
 The daemon creates:
 
