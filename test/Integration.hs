@@ -58,10 +58,7 @@ data CommandBehavior
 
 data LoginBehavior
   = LoginCommandBehavior CommandBehavior
-  | EmailOtpRequired MissingCodeBehavior
-
-data MissingCodeBehavior
-  = MissingCodeHangs
+  | LoginRequiresCode
 
 data BwBehavior = BwBehavior
   { logoutBehavior :: CommandBehavior,
@@ -80,8 +77,7 @@ data AgentConfig = AgentConfig
     agentBwPathMode :: BwPathMode,
     agentPathOverride :: Maybe String,
     agentServerUrlOverride :: Maybe String,
-    agentRefreshIntervalSecondsOverride :: Maybe Int,
-    agentLoginTimeoutMicrosOverride :: Maybe String
+    agentRefreshIntervalSecondsOverride :: Maybe Int
   }
 
 data AgentResource = AgentResource
@@ -439,14 +435,13 @@ integrationTests =
           "expected empty password failure response"
           (Agent.Failure "password was empty")
           passwordResponse
-    , testCase "sending unlock fails instead of hanging when bw requires email OTP" $ do
+    , testCase "sending unlock fails when bw requires a two-factor code" $ do
         agent <-
           setupAgent
             defaultAgentConfig
               { agentBwBehavior =
                   defaultFailingBw
-                    { unlockBehavior = EmailOtpRequired MissingCodeHangs },
-                agentLoginTimeoutMicrosOverride = Just "100000"
+                    { unlockBehavior = LoginRequiresCode }
               }
         unlockResponse <-
           sendRequest
@@ -458,7 +453,7 @@ integrationTests =
           "expected helpful OTP failure response"
           (Agent.Failure "two-factor code required; run scripts/hwarden-first-login")
           unlockResponse
-        assertEqual "expected locked status after missing OTP failure" (Agent.Success "locked") finalStatus
+        assertEqual "expected locked status after missing code failure" (Agent.Success "locked") finalStatus
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
         agent <- setupAgent defaultAgentConfig
         initialStatus <- sendRequest (socketPath agent) Agent.Status
@@ -612,6 +607,10 @@ scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior
       "  printf '%s\\n' 'BITWARDENCLI_APPDATA_DIR did not match expected path' 1>&2",
       "  exit 1",
       "fi",
+      "if [ \"$1\" = \"login\" ] && [ \"$2\" != \"--nointeraction\" ]; then",
+      "  printf '%s\\n' 'bw login was not run with --nointeraction' 1>&2",
+      "  exit 1",
+      "fi",
       "case \"$1\" in",
       "  logout)",
       emitLogoutBehavior "    " (logoutBehavior bwBehavior),
@@ -713,21 +712,13 @@ emitLoginBehavior :: BS8.ByteString -> LoginBehavior -> BS8.ByteString
 emitLoginBehavior indent loginBehavior =
   case loginBehavior of
     LoginCommandBehavior commandBehavior ->
-      emitBehavior indent commandBehavior
-    EmailOtpRequired missingCodeBehavior ->
       BS8.unlines
-        [ indent <> "while [ $# -gt 0 ]; do",
-          indent <> "  shift",
-          indent <> "done",
-          emitMissingCodeBehavior indent missingCodeBehavior
+        [ emitBehavior indent commandBehavior
         ]
-
-emitMissingCodeBehavior :: BS8.ByteString -> MissingCodeBehavior -> BS8.ByteString
-emitMissingCodeBehavior indent missingCodeBehavior =
-  case missingCodeBehavior of
-    MissingCodeHangs ->
+    LoginRequiresCode ->
       BS8.unlines
-        [ indent <> "  while :; do :; done"
+        [ indent <> "printf '%s\\n' 'Code is required' 1>&2",
+          indent <> "exit 1"
         ]
 
 emitLogoutBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
@@ -780,8 +771,7 @@ defaultAgentConfig =
       agentBwPathMode = UseFakeBwPath,
       agentPathOverride = Nothing,
       agentServerUrlOverride = Nothing,
-      agentRefreshIntervalSecondsOverride = Nothing,
-      agentLoginTimeoutMicrosOverride = Nothing
+      agentRefreshIntervalSecondsOverride = Nothing
     }
 
 listItemsPayload :: BS8.ByteString
@@ -918,16 +908,11 @@ buildAgentEnv ::
   [(String, String)]
 buildAgentEnv agentConfig runtimeDir fakeBwPath =
   applyRefreshIntervalOverride
-    . applyLoginTimeoutOverride
     . applyServerUrlOverride
     . applyPathOverride
     . applyBwPathMode
     . setEnvVar "XDG_RUNTIME_DIR" runtimeDir
   where
-    applyLoginTimeoutOverride =
-      maybe id
-        (setEnvVar "HWARDEN_BW_LOGIN_TIMEOUT_MICROS")
-        (agentLoginTimeoutMicrosOverride agentConfig)
     applyServerUrlOverride =
       maybe id
         (setEnvVar "HWARDEN_SERVER_URL")

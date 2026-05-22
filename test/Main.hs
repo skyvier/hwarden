@@ -812,6 +812,7 @@ propertyUpdateItemCacheStateFailureWithoutReadyCache previousFailure newFailure 
 
 expectedFailure :: Agent.UnlockError -> Agent.Response
 expectedFailure Agent.UnlockUnavailable = Agent.Failure "bw login failed"
+expectedFailure Agent.CodeRequired = Agent.Failure "two-factor code required; run scripts/hwarden-first-login"
 expectedFailure (Agent.UnlockFailed err) = Agent.Failure (Agent.sanitizeUnlockError (Agent.Password "secret") err)
 
 statusResponseMatchesState :: Agent.AgentState -> Agent.Response -> Bool

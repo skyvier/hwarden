@@ -29,6 +29,7 @@ import Test.QuickCheck (Arbitrary (arbitrary), oneof)
 
 data UnlockError
   = UnlockUnavailable
+  | CodeRequired
   | UnlockFailed Text
   deriving (Eq, Show)
 
@@ -46,6 +47,7 @@ instance Arbitrary UnlockError where
   arbitrary =
     oneof
       [ pure UnlockUnavailable,
+        pure CodeRequired,
         UnlockFailed . T.pack <$> arbitrary
       ]
 

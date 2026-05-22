@@ -1,7 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Hwarden.Bitwarden.Real
   ( RealBitwardenT (..),
     HasBitwardenCliConfig (..),
@@ -9,9 +7,7 @@ module Hwarden.Bitwarden.Real
   )
 where
 
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (SomeException, evaluate, try)
+import Control.Exception (SomeException, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, asks)
 import Data.Aeson (eitherDecodeStrict)
@@ -38,16 +34,13 @@ import Hwarden.Types
 import Katip (Katip, KatipContext, katipAddContext, sl)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
-import System.IO (Handle, hClose)
+import System.IO (hClose)
 import System.Process
-  ( CreateProcess (env, std_err, std_in, std_out),
-    ProcessHandle,
+  ( CreateProcess (env, std_err, std_out),
     StdStream (CreatePipe),
     createProcess,
-    getProcessExitCode,
     proc,
     readCreateProcessWithExitCode,
-    terminateProcess,
     waitForProcess
   )
 
@@ -68,18 +61,13 @@ instance
   unlock (Username email) (Password password) = RealBitwardenT $ do
     katipAddContext (sl "email" email) $
       logInfo "running bw login"
-    let args = [T.unpack email, T.unpack password, "--raw"]
-    command <- isolatedBwProcess ("login" : args)
-    result <- liftIO (runLoginCommand command)
-    pure $
-      case result of
-        Left err -> Left err
-        Right (exitCode, stdoutText, stderrText) ->
-          case exitCode of
-            ExitSuccess ->
-              Right (SessionKey (T.strip (T.pack stdoutText)))
-            ExitFailure _ ->
-              Left (UnlockFailed (sanitizeUnlockFailure stderrText))
+    let args = ["login", "--nointeraction", T.unpack email, T.unpack password, "--raw"]
+    command <- isolatedBwProcess args
+    handleCheckedCommand
+      (runCommand command)
+      UnlockUnavailable
+      (Right . SessionKey . T.strip . T.pack)
+      sanitizeUnlockFailure
 
   listItems (SessionKey rawSessionKey) = RealBitwardenT $ do
     logInfo "running bw list items"
@@ -169,47 +157,6 @@ isolatedBwEnv = do
 runCommand :: CreateProcess -> IO (ExitCode, String, String)
 runCommand command = readCreateProcessWithExitCode command ""
 
-runLoginCommand :: CreateProcess -> IO (Either UnlockError (ExitCode, String, String))
-runLoginCommand command = do
-  timeoutMicros <- loginTimeoutMicros
-  result <-
-    ( try
-        (do
-          (Just stdinHandle, Just stdoutHandle, Just stderrHandle, processHandle) <-
-            createProcess
-              command
-                { std_in = CreatePipe,
-                  std_out = CreatePipe,
-                  std_err = CreatePipe
-                }
-          hClose stdinHandle
-          stdoutVar <- newEmptyMVar
-          stderrVar <- newEmptyMVar
-          _ <- forkIO (readHandleText stdoutHandle stdoutVar)
-          _ <- forkIO (readHandleText stderrHandle stderrVar)
-          exitCode <- waitForExit timeoutMicros processHandle
-          case exitCode of
-            Nothing -> do
-              terminateProcess processHandle
-              terminated <- waitForExit timeoutMicros processHandle
-              case terminated of
-                Nothing ->
-                  pure (Left unlockTimeoutFailure)
-                Just _terminatedExitCode -> do
-                  _ <- takeMVar stdoutVar
-                  _ <- takeMVar stderrVar
-                  pure (Left unlockTimeoutFailure)
-            Just finishedExitCode -> do
-              stdoutText <- takeMVar stdoutVar
-              stderrText <- takeMVar stderrVar
-              pure (Right (finishedExitCode, stdoutText, stderrText)))
-      ) ::
-        IO (Either SomeException (Either UnlockError (ExitCode, String, String)))
-  pure $
-    case result of
-      Left (_ :: SomeException) -> Left UnlockUnavailable
-      Right loginResult -> loginResult
-
 runProcessBytes :: CreateProcess -> IO (ExitCode, BS.ByteString, BS.ByteString)
 runProcessBytes command = do
   (Nothing, Just stdoutHandle, Just stderrHandle, processHandle) <-
@@ -265,62 +212,13 @@ handleCheckedByteCommand action unavailable handleSuccess handleFailure = do
           ExitSuccess -> handleSuccess stdoutBytes
           ExitFailure _ -> Left (handleFailure stderrBytes)
 
-loginTimeoutMicros :: IO Int
-loginTimeoutMicros = do
-  envVars <- getEnvironment
-  pure $
-    case lookup "HWARDEN_BW_LOGIN_TIMEOUT_MICROS" envVars >>= readMaybeInt of
-      Just micros -> micros
-      Nothing -> defaultLoginTimeoutMicros
-
-defaultLoginTimeoutMicros :: Int
-defaultLoginTimeoutMicros = 5 * 1000 * 1000
-
-pollIntervalMicros :: Int
-pollIntervalMicros = 50 * 1000
-
-readHandleText :: Handle -> MVar String -> IO ()
-readHandleText handle outputVar = do
-  bytes <- BS.hGetContents handle
-  _ <- evaluate (BS.length bytes)
-  hClose handle
-  putMVar outputVar (BS8.unpack bytes)
-
-waitForExit :: Int -> ProcessHandle -> IO (Maybe ExitCode)
-waitForExit timeoutMicros processHandle = go timeoutMicros
-  where
-    go remainingMicros = do
-      exitCode <- getProcessExitCode processHandle
-      case exitCode of
-        Just code -> pure (Just code)
-        Nothing
-          | remainingMicros <= 0 -> pure Nothing
-          | otherwise -> do
-              threadDelay pollIntervalMicros
-              go (remainingMicros - pollIntervalMicros)
-
-unlockTimeoutFailure :: UnlockError
-unlockTimeoutFailure =
-  UnlockFailed "two-factor code required; run scripts/hwarden-first-login"
-
-sanitizeUnlockFailure :: String -> Text
+sanitizeUnlockFailure :: String -> UnlockError
 sanitizeUnlockFailure stderrText
-  | looksLikeOtpRequired trimmed = "two-factor code required; run scripts/hwarden-first-login"
-  | T.null trimmed = "bw login failed"
-  | otherwise = trimmed
+  | "Code is required" `T.isInfixOf` trimmed = CodeRequired
+  | T.null trimmed = UnlockFailed "bw login failed"
+  | otherwise = UnlockFailed trimmed
   where
     trimmed = T.strip (T.pack stderrText)
-
-looksLikeOtpRequired :: Text -> Bool
-looksLikeOtpRequired stderrText =
-  let lowered = T.toLower stderrText
-   in or
-        [ "two-factor" `T.isInfixOf` lowered,
-          "two factor" `T.isInfixOf` lowered,
-          "two-step" `T.isInfixOf` lowered,
-          "verification code" `T.isInfixOf` lowered,
-          "email verification" `T.isInfixOf` lowered
-        ]
 
 sanitizeCommandFailure :: String -> Text
 sanitizeCommandFailure stderrText =
@@ -341,9 +239,3 @@ parsePasswordValue stdoutText =
 
 setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
 setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
-
-readMaybeInt :: String -> Maybe Int
-readMaybeInt value =
-  case reads value of
-    [(number, "")] -> Just number
-    _ -> Nothing
