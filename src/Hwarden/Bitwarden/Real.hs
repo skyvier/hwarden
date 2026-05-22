@@ -61,8 +61,15 @@ instance
   unlock (Username email) (Password password) = RealBitwardenT $ do
     katipAddContext (sl "email" email) $
       logInfo "running bw login"
-    let args = ["login", "--nointeraction", T.unpack email, T.unpack password, "--raw"]
-    command <- isolatedBwProcess args
+    let args =
+          [ "login",
+            "--nointeraction",
+            T.unpack email,
+            "--passwordenv",
+            loginPasswordEnvVar,
+            "--raw"
+          ]
+    command <- isolatedBwProcessWithEnv [(loginPasswordEnvVar, T.unpack password)] args
     handleCheckedCommand
       (runCommand command)
       UnlockUnavailable
@@ -128,10 +135,17 @@ isolatedBwProcess ::
   (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
   [String] ->
   m CreateProcess
-isolatedBwProcess args = do
+isolatedBwProcess = isolatedBwProcessWithEnv []
+
+isolatedBwProcessWithEnv ::
+  (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
+  [(String, String)] ->
+  [String] ->
+  m CreateProcess
+isolatedBwProcessWithEnv extraEnv args = do
   cliPath <- asks bitwardenCliPath
   isolatedEnv <- isolatedBwEnv
-  pure (proc cliPath args) {env = Just isolatedEnv}
+  pure (proc cliPath args) {env = Just (foldr (uncurry setEnvVar) isolatedEnv extraEnv)}
 
 authenticatedBwProcess ::
   (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
@@ -229,6 +243,9 @@ sanitizeLogoutFailure :: String -> Text
 sanitizeLogoutFailure stderrText =
   let trimmed = T.strip (T.pack stderrText)
    in if T.null trimmed then "bw logout failed" else trimmed
+
+loginPasswordEnvVar :: String
+loginPasswordEnvVar = "HWARDEN_BW_PASSWORD"
 
 parsePasswordValue :: String -> Either GetPasswordError PasswordValue
 parsePasswordValue stdoutText =
