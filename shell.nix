@@ -72,6 +72,8 @@ hpkgs.shellFor {
     pkgs.rofi
     pkgs.socat
     pkgs.xclip
+    pkgs.ghcid
+    pkgs.glow
     bitwardenCli
     wrappedHwardenAgent
   ];

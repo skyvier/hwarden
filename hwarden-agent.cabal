@@ -73,4 +73,5 @@ test-suite hwarden-agent-test
     , time
     , unix
     , uuid
+    , temporary
   ghc-options:         -Wall

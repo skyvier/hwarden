@@ -20,6 +20,7 @@ import Hwarden.Bitwarden
   ( Bitwarden (..),
     GetPasswordError (..),
     ListItemsError (..),
+    SyncError (..),
     UnlockError (..),
     extractLoginItems
   )
@@ -89,6 +90,15 @@ instance
           pure (extractLoginItems bwItems)
       )
       (ListItemsFailed . T.pack . BS8.unpack)
+
+  sync (SessionKey rawSessionKey) = RealBitwardenT $ do
+    logInfo "running bw sync"
+    command <- authenticatedBwProcess (SessionKey rawSessionKey) ["sync"]
+    handleCheckedCommand
+      (runCommand command)
+      SyncUnavailable
+      (const (Right ()))
+      sanitizeSyncFailure
 
   getPassword (SessionKey rawSessionKey) (LoginItemId itemId) = RealBitwardenT $ do
     logInfo "running bw get password"
@@ -243,6 +253,11 @@ sanitizeLogoutFailure :: String -> Text
 sanitizeLogoutFailure stderrText =
   let trimmed = T.strip (T.pack stderrText)
    in if T.null trimmed then "bw logout failed" else trimmed
+
+sanitizeSyncFailure :: String -> SyncError
+sanitizeSyncFailure stderrText =
+  let trimmed = T.strip (T.pack stderrText)
+   in if T.null trimmed then SyncFailed "bw sync failed" else SyncFailed trimmed
 
 loginPasswordEnvVar :: String
 loginPasswordEnvVar = "HWARDEN_BW_PASSWORD"

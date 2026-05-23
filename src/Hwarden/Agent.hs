@@ -64,7 +64,7 @@ import Hwarden.Bitwarden
   ( Bitwarden (getPassword, listItems, unlock),
     GetPasswordError (..),
     ListItemsError (..),
-    UnlockError (..)
+    UnlockError (..), SyncError (..), sync
   )
 import Hwarden.Bitwarden.Real (configureServer)
 import Hwarden.Logging (logInfo)
@@ -106,6 +106,8 @@ import Test.QuickCheck (Arbitrary (arbitrary), Gen, NonNegative (getNonNegative)
 import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
 import qualified UnliftIO.Concurrent as Concurrent
+import Control.Monad.Except (runExceptT, ExceptT (..))
+import Data.Bifunctor (first)
 
 data Request
   = UnlockRequest Username Password
@@ -456,14 +458,20 @@ startRefreshLoop agentStateVar sessionKey = do
         refreshLoop refreshIntervalMicroseconds
 
 refreshCacheEntry :: (Bitwarden m, MonadTime m) => SessionKey -> m (Either CacheFillFailure CacheEntry)
-refreshCacheEntry sessionKey = do
-  listItemsResult <- listItems sessionKey
-  case listItemsResult of
-    Right items -> do
-      now <- currentTime
-      pure (Right (CacheEntry items now))
-    Left listItemsFailure ->
-      pure (Left (cacheFillFailureFromListItemsError sessionKey listItemsFailure))
+refreshCacheEntry sessionKey = runExceptT $ do
+  ExceptT $ first syncErrorToCacheFailure <$> sync sessionKey
+  items <- 
+    ExceptT $ first (cacheFillFailureFromListItemsError sessionKey) <$> listItems sessionKey
+  now <- currentTime
+  pure $ CacheEntry items now
+
+
+  where
+    syncErrorToCacheFailure :: SyncError -> CacheFillFailure
+    syncErrorToCacheFailure SyncUnavailable =
+      CacheFillFailed "bw sync was unavailable"
+    syncErrorToCacheFailure (SyncFailed errMsg) =
+      CacheFillFailed $ "bw sync failed due to " <> errMsg
 
 initialItemCacheState :: Either CacheFillFailure CacheEntry -> ItemCacheState
 initialItemCacheState refreshResult =
