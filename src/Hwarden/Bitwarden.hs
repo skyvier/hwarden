@@ -4,6 +4,7 @@ module Hwarden.Bitwarden
   ( Bitwarden (..),
     GetPasswordError (..),
     ListItemsError (..),
+    SyncError (..),
     UnlockError (..),
     BwItem (..),
     BwLogin (..),
@@ -43,6 +44,11 @@ data GetPasswordError
   | GetPasswordFailed Text
   deriving (Eq, Show)
 
+data SyncError
+  = SyncUnavailable
+  | SyncFailed Text
+  deriving (Eq, Show)
+
 instance Arbitrary UnlockError where
   arbitrary =
     oneof
@@ -65,9 +71,17 @@ instance Arbitrary GetPasswordError where
         GetPasswordFailed . T.pack <$> arbitrary
       ]
 
+instance Arbitrary SyncError where
+  arbitrary =
+    oneof
+      [ pure SyncUnavailable,
+        SyncFailed . T.pack <$> arbitrary
+      ]
+
 class Monad m => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
+  sync :: SessionKey -> m (Either SyncError ())
   getPassword :: SessionKey -> LoginItemId -> m (Either GetPasswordError PasswordValue)
 
 defaultBitwardenServerUrl :: Text

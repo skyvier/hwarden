@@ -29,18 +29,16 @@ import System.Directory
     createDirectoryIfMissing,
     doesFileExist,
     getPermissions,
-    removeDirectoryRecursive,
-    removeFile,
     setPermissions
   )
 import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import System.IO (hClose, openTempFile)
+import System.IO (withFile, IOMode (..))
 import System.Process
   ( CreateProcess (cwd, env, std_err, std_out),
     ProcessHandle,
-    StdStream (Inherit),
+    StdStream (..),
     createProcess,
     getProcessExitCode,
     proc,
@@ -51,10 +49,14 @@ import System.Process
   )
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
+import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
+import Control.Monad (void)
+import Hwarden.Runtime (AgentPaths)
 
 data CommandBehavior
   = CommandSucceeds BS8.ByteString
   | CommandFails BS8.ByteString
+  | CommandArbitrary (BS8.ByteString -> BS8.ByteString)
 
 data LoginBehavior
   = LoginCommandBehavior CommandBehavior
@@ -65,6 +67,7 @@ data BwBehavior = BwBehavior
     configServerBehavior :: CommandBehavior,
     unlockBehavior :: LoginBehavior,
     listItemsBehaviors :: [CommandBehavior],
+    syncBehavior :: [CommandBehavior],
     getPasswordBehavior :: CommandBehavior
   }
 
@@ -76,13 +79,14 @@ data AgentConfig = AgentConfig
   { agentBwBehavior :: BwBehavior,
     agentBwPathMode :: BwPathMode,
     agentPathOverride :: Maybe String,
-    agentServerUrlOverride :: Maybe String,
-    agentRefreshIntervalSecondsOverride :: Maybe Int
+    agentServerUrl :: Maybe String,
+    agentRefreshIntervalSeconds :: Maybe Int
   }
 
 data AgentResource = AgentResource
   { socketPath :: FilePath,
     processHandle :: ProcessHandle,
+    runtimePaths :: AgentPaths,
     tempRoot :: FilePath
   }
 
@@ -90,102 +94,129 @@ integrationTests :: TestTree
 integrationTests =
   testGroup
     "integration"
-    [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $ do
-        agent <- setupAgent defaultAgentConfig
-        response <- sendRequest (socketPath agent) Agent.Status
-        cleanupAgent agent
-        assertEqual
-          "expected locked status response"
-          (Agent.Success "locked")
-          response
+    [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $
+        let 
+          agentConfig = defaultAgentConfig
+            { agentBwBehavior =
+                defaultFailingBw 
+                  { configServerBehavior = CommandSucceeds "configuration succeeds"
+                  -- agent won't start if it fails to configure itself
+                  }
+            }
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            response <- sendRequest (socketPath agent) Agent.Status
+            assertEqual
+              "expected locked status response"
+              (Agent.Success "locked")
+              response
 
     -- setupAgent waits for the daemon to finish startup, and startup always
     -- runs `bw logout` before `bw config server`. That means even tests that
-    -- only create and tear down the agent still exercise the fake `bw` script
-    -- and verify the isolated BITWARDENCLI_APPDATA_DIR bootstrap path.
-    , testCase "agent startup configures the default Bitwarden EU server in the isolated profile" $ do
-        agent <- setupAgent defaultAgentConfig
-        cleanupAgent agent
+    -- only create and tear down the agent still exercise the fake `bw` script.
+    
+    -- the fake bw script (see 'scriptFor') tests whether or not "bw config server"
+    -- is called with the expected default value for it... I know it's complex
+    , testCase "agent startup configures the default Bitwarden EU server in the isolated profile" $ 
+        let 
+          agentConfig = defaultAgentConfig
+            { agentBwBehavior =
+                defaultFailingBw 
+                  { configServerBehavior = CommandSucceeds "configuration succeeds"
+                  -- agent won't start if it fails to configure itself
+                  }
+            }
+        in
+          withReadyAgent agentConfig (\_ -> return ())
+
+    -- the fake bw script (see 'scriptFor') tests whether or not "bw config server"
+    -- is called with the expected value for it, set via the HWARDEN_SERVER_URL
+    -- env var, the logic is hidden in withConfiguredAgent
     , testCase "agent startup honors HWARDEN_SERVER_URL in the isolated profile" $ do
-        agent <-
-          setupAgent
+        let 
+          agentConfig = 
             defaultAgentConfig
-              { agentServerUrlOverride = Just "https://vault.example.test"
-              }
-        cleanupAgent agent
-    , testCase "agent startup continues when bw logout fails before server configuration" $ do
-        agent <-
-          setupAgent
-            defaultAgentConfig
-              { agentBwBehavior =
-                  defaultFailingBw
-                    { logoutBehavior = CommandFails "logout failed"
+              { agentServerUrl = Just "https://vault.example.test"
+              , agentBwBehavior = 
+                  defaultFailingBw 
+                    { configServerBehavior = CommandSucceeds "configuration succeeds"
+                    -- agent won't start if it fails to configure itself
                     }
               }
-        cleanupAgent agent
+         in withReadyAgent agentConfig (\_ -> return ())
+
+    -- if logout failed, the server still becomes ready (socket is created)
+    , testCase "agent startup continues when bw logout fails before server configuration" $
+        let
+          agentConfig = defaultAgentConfig
+            { agentBwBehavior =
+                defaultFailingBw
+                  { logoutBehavior = CommandFails ""
+                  , configServerBehavior = CommandSucceeds ""
+                  }
+            }
+        in
+          withReadyAgent agentConfig $ \_ -> return ()
+
     -- This is a pragmatic race-based check, not a proof: we poll for process
     -- exit and socket creation, so the result still depends on scheduling.
     -- The goal is to catch regressions in the expected startup ordering without
     -- adding a more complex synchronization protocol to the fake `bw` script.
     , testCase "agent startup fails before creating the socket if bw config server fails" $ do
-        agent <-
-          spawnConfiguredAgent
-            defaultAgentConfig
-              { agentBwBehavior =
-                  defaultFailingBw {configServerBehavior = CommandFails "config failed"}
-              }
-        exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
-        exitCode <- waitForProcess (processHandle agent)
-        removeDirectoryRecursive (tempRoot agent)
-        assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
-        assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
-    , testCase "agent startup fails when bw config server fails after the logout attempt" $ do
-        agent <-
-          spawnConfiguredAgent
-            defaultAgentConfig
-              { agentBwBehavior =
-                  defaultFailingBw
-                    { logoutBehavior = CommandSucceeds "",
-                      configServerBehavior = CommandFails "config failed"
-                    }
-              }
-        exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
-        exitCode <- waitForProcess (processHandle agent)
-        removeDirectoryRecursive (tempRoot agent)
-        assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
-        assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
-    , testCase "agent startup fails before creating the socket when HWARDEN_BW_PATH is missing" $ do
-        agent <-
-          spawnConfiguredAgent
+        withConfiguredAgent defaultAgentConfig $ \agent -> do
+          exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
+          exitCode <- waitForProcess (processHandle agent)
+          assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
+          assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
+
+    , testCase "agent startup fails when bw config server fails after the logout attempt" $ 
+        let
+          agentConfig = defaultAgentConfig
+            { agentBwBehavior =
+                defaultFailingBw
+                  { logoutBehavior = CommandSucceeds "",
+                    configServerBehavior = CommandFails "config failed"
+                  }
+            }
+        in 
+          withConfiguredAgent agentConfig $ \agent -> do
+            exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
+            exitCode <- waitForProcess (processHandle agent)
+            assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
+            assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
+    , testCase "agent startup fails before creating the socket when HWARDEN_BW_PATH is missing" $ 
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwPathMode = OmitBwPath
               }
-        exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
-        exitCode <- waitForProcess (processHandle agent)
-        removeDirectoryRecursive (tempRoot agent)
-        assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
-        assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
+        in 
+          withConfiguredAgent agentConfig $ \agent -> do
+            exitedBeforeSocketReady <- waitForProcessExitBeforeSocketReady agent
+            exitCode <- waitForProcess (processHandle agent)
+            assertBool "expected startup failure before socket became ready" exitedBeforeSocketReady
+            assertBool "expected startup failure exit code" (exitCode /= ExitSuccess)
     , testCase "agent env can set an empty PATH while still injecting HWARDEN_BW_PATH" $ do
-        let envVars =
-              buildAgentEnv
-                defaultAgentConfig {agentPathOverride = Just ""}
-                "/tmp/runtime"
-                "/tmp/fake-bw"
-                [("PATH", "/bin:/usr/bin")]
-        lookup "HWARDEN_BW_PATH" envVars @?= Just "/tmp/fake-bw"
-        lookup "PATH" envVars @?= Just ""
+        withEnvVarOverride "PATH" (Just "/bin:/usr/bin") $ do
+          withAgentEnv 
+            defaultAgentConfig {agentPathOverride = Just ""}
+            "/tmp/runtime"
+            "/tmp/fake-bw" $ \_ -> do
+              mHwardenBwPath <- lookupEnv "HWARDEN_BW_PATH" 
+              mHwardenBwPath @?= Just "/tmp/fake-bw"
+              mPath <- lookupEnv "PATH"
+              mPath @?= Nothing
     , testCase "agent executable lookup honors HWARDEN_AGENT_TEST_EXE when PATH is empty" $ do
-        tempDir <- createTempDir "hwarden-agent-exe"
-        let fakeAgentPath = tempDir </> "hwarden-agent"
-        BS8.writeFile fakeAgentPath "#!/bin/sh\nexit 0\n"
-        permissions <- getPermissions fakeAgentPath
-        setPermissions fakeAgentPath permissions {executable = True}
-        executablePath <-
-          withEnvVarOverride "PATH" (Just "") $
-            withEnvVarOverride "HWARDEN_AGENT_TEST_EXE" (Just fakeAgentPath) $
-              requireAgentExecutable
-        removeDirectoryRecursive tempDir
-        executablePath @?= fakeAgentPath
+        withSystemTempDirectory "hwarden-agent-exe" $ \tempDir -> do
+          let fakeAgentPath = tempDir </> "hwarden-agent"
+          BS8.writeFile fakeAgentPath "#!/bin/sh\nexit 0\n"
+          permissions <- getPermissions fakeAgentPath
+          setPermissions fakeAgentPath permissions {executable = True}
+          executablePath <-
+            withEnvVarOverride "PATH" (Just "") $
+              withEnvVarOverride "HWARDEN_AGENT_TEST_EXE" (Just fakeAgentPath) $
+                requireAgentExecutable
+          executablePath @?= fakeAgentPath
     , testCase "agent executable lookup falls back to cabal list-bin instead of PATH" $ do
         executablePath <-
           requireAgentExecutableWith
@@ -212,97 +243,110 @@ integrationTests =
         stdoutText @?= "unknown\n"
         stderrText @?= ""
 
-    , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ do
-        agent <- setupAgent defaultAgentConfig
-        response <- sendRequest (socketPath agent) Agent.ListItems
-        cleanupAgent agent
-        assertEqual
-          "expected locked list-items response"
-          (Agent.Failure "locked")
-          response
-    , testCase "sending a get-password request via the socket to a fresh agent process results in a locked failure" $ do
-        agent <- setupAgent defaultAgentConfig
-        response <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-        cleanupAgent agent
-        assertEqual
-          "expected locked get-password response"
-          (Agent.Failure "locked")
-          response
-    , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $ do
-        agent <-
-          setupAgent
+    , testCase "sending a list-items request via the socket to a fresh agent process results in a locked failure" $ 
+        let
+          agentConfig = defaultAgentConfig
+            { agentBwBehavior = defaultStartingBw
+            }
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            response <- sendRequest (socketPath agent) Agent.ListItems
+            assertEqual
+              "expected locked list-items response"
+              (Agent.Failure "locked")
+              response
+    , testCase "sending a get-password request via the socket to a fresh agent process results in a locked failure" $ 
+        let
+          agentConfig = defaultAgentConfig
+            { agentBwBehavior = defaultStartingBw
+            }
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            response <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
+            assertEqual
+              "expected locked get-password response"
+              (Agent.Failure "locked")
+              response
+    , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $
+        let
+          agentConfig =
             defaultAgentConfig
-              { agentBwBehavior = defaultFailingBw {unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123")}
+              { agentBwBehavior = 
+                  defaultStartingBw 
+                    { unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123") }
               }
-        initialStatus <- sendRequest (socketPath agent) Agent.Status
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        finalStatus <- sendRequest (socketPath agent) Agent.Status
-        cleanupAgent agent
-        assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertEqual "expected unlocked status after successful unlock" (Agent.Success "unlocked") finalStatus
-    , testCase "sending unlock then list-items via the socket returns login item summaries" $ do
-        agent <-
-          setupAgent
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            initialStatus <- sendRequest (socketPath agent) Agent.Status
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            finalStatus <- sendRequest (socketPath agent) Agent.Status
+            assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected unlocked status after successful unlock" (Agent.Success "unlocked") finalStatus
+    , testCase "sending unlock then list-items via the socket returns login item summaries" $
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
-                    { logoutBehavior = CommandSucceeds "",
-                      configServerBehavior = CommandSucceeds "",
-                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
+                  defaultStartingBw
+                    { unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehaviors = [CommandSucceeds listItemsPayload],
-                      getPasswordBehavior = CommandFails "bw get password failed"
+                      syncBehavior = [CommandSucceeds ""]
                     }
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertEqual
-          "expected listed login items"
-          (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
-          itemsResponse
-    , testCase "sending unlock then waiting for the background refresh returns refreshed login item summaries" $ do
-        agent <-
-          setupAgent
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual
+              "expected listed login items"
+              (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
+              itemsResponse
+    , testCase "sending unlock then waiting for the background refresh returns refreshed login item summaries" $ 
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
+                  defaultStartingBw 
                     { logoutBehavior = CommandSucceeds "",
-                      configServerBehavior = CommandSucceeds "",
                       unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
                       listItemsBehaviors =
                         [ CommandSucceeds listItemsPayload,
                           CommandSucceeds refreshedListItemsPayload
                         ],
-                      getPasswordBehavior = CommandFails "bw get password failed"
+                      syncBehavior = 
+                        [ CommandSucceeds "",
+                          CommandSucceeds ""
+                        ]
                     },
-                agentRefreshIntervalSecondsOverride = Just 1
+                agentRefreshIntervalSeconds = Just 1
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        itemsResponse <-
-          waitForMatchingResponse
-            (socketPath agent)
-            Agent.ListItems
-            (matchesExpectedItems refreshedListItemsSummary)
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertItemListMatches "expected refreshed login items" refreshedListItemsSummary itemsResponse
-    , testCase "sending unlock with a failed initial cache fill eventually serves cached items after a background refresh" $ do
-        agent <-
-          setupAgent
+          in
+            withReadyAgent agentConfig $ \agent -> do
+              unlockResponse <-
+                sendRequest
+                  (socketPath agent)
+                  (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+              itemsResponse <-
+                waitForMatchingResponse
+                  (socketPath agent)
+                  Agent.ListItems
+                  (matchesExpectedItems refreshedListItemsSummary)
+              assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+              assertItemListMatches "expected refreshed login items" refreshedListItemsSummary itemsResponse
+    , testCase "sending unlock with a failed initial cache fill eventually serves cached items after a background refresh" $
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
+                  defaultFailingBw 
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
@@ -310,30 +354,34 @@ integrationTests =
                         [ CommandFails "bw list items failed",
                           CommandSucceeds listItemsPayload
                         ],
-                      getPasswordBehavior = CommandFails "bw get password failed"
+                      syncBehavior = 
+                        [ CommandSucceeds "",
+                          CommandSucceeds ""
+                        ]
                     },
-                agentRefreshIntervalSecondsOverride = Just 1
+                agentRefreshIntervalSeconds = Just 1
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        initialItemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-        recoveredItemsResponse <-
-          waitForMatchingResponse
-            (socketPath agent)
-            Agent.ListItems
-            (matchesExpectedItems listItemsSummary)
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertEqual "expected cache-unavailable response before refresh succeeds" (Agent.Failure "item cache unavailable") initialItemsResponse
-        assertItemListMatches "expected cached items after background refresh succeeds" listItemsSummary recoveredItemsResponse
-    , testCase "sending unlock then waiting for a failed background refresh still serves stale cached items" $ do
-        agent <-
-          setupAgent
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            initialItemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+            recoveredItemsResponse <-
+              waitForMatchingResponse
+                (socketPath agent)
+                Agent.ListItems
+                (matchesExpectedItems listItemsSummary)
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected cache-unavailable response before refresh succeeds" (Agent.Failure "item cache unavailable") initialItemsResponse
+            assertItemListMatches "expected cached items after background refresh succeeds" listItemsSummary recoveredItemsResponse
+    , testCase "sending unlock then waiting for a failed background refresh still serves stale cached items" $
+        let 
+          agentConfig = 
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
+                 defaultFailingBw
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
@@ -341,208 +389,293 @@ integrationTests =
                         [ CommandSucceeds listItemsPayload,
                           CommandFails "bw list items failed"
                         ],
-                      getPasswordBehavior = CommandFails "bw get password failed"
+                      syncBehavior = [CommandSucceeds ""]
                     },
-                agentRefreshIntervalSecondsOverride = Just 1
+                agentRefreshIntervalSeconds = Just 1
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        threadDelay 1200000
-        itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        case itemsResponse of
-          Agent.ItemList actualItems (Agent.CacheAgeSeconds ageSeconds) -> do
-            assertEqual "expected stale cached items after refresh failure" listItemsSummary actualItems
-            assertBool "expected stale cache age after refresh failure" (ageSeconds >= 1)
-            assertBool "expected recent stale cache age after refresh failure" (ageSeconds <= 5)
-          _ ->
-            assertEqual
-              "expected stale cached items after refresh failure"
-              (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
-              itemsResponse
-    , testCase "sending unlock then get-password via the socket returns item id and password" $ do
-        agent <-
-          setupAgent
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            threadDelay 1200000
+            itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            case itemsResponse of
+              Agent.ItemList actualItems (Agent.CacheAgeSeconds ageSeconds) -> do
+                assertEqual "expected stale cached items after refresh failure" listItemsSummary actualItems
+                assertBool "expected stale cache age after refresh failure" (ageSeconds >= 1)
+                assertBool "expected recent stale cache age after refresh failure" (ageSeconds <= 5)
+              _ ->
+                assertEqual
+                  "expected stale cached items after refresh failure"
+                  (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
+                  itemsResponse
+    , testCase "bw sync is called during cache refresh" $
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
+                  defaultStartingBw 
+                    { logoutBehavior = CommandSucceeds "",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
+                      listItemsBehaviors =
+                        [ CommandSucceeds listItemsPayload,
+                          CommandSucceeds refreshedListItemsPayload
+                        ],
+                      syncBehavior = 
+                        [ CommandSucceeds "",
+                          CommandArbitrary mksyncScript
+                        ]
+                    },
+                agentRefreshIntervalSeconds = Just 1
+              }
+
+
+          mksyncScript indent =
+            BS8.unlines
+              [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/synced\"",
+                indent <> "exit 0"
+              ]
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            let 
+              appDataDir = Runtime.bitwardenCliAppDataDir $ runtimePaths agent
+              syncFile = appDataDir </> "synced"
+
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            
+            itemsResponse <-
+              waitForMatchingResponse
+                (socketPath agent)
+                Agent.ListItems
+                (matchesExpectedItems refreshedListItemsSummary)
+
+            syncWasCalled <- doesFileExist syncFile
+
+            assertBool "bw sync was not called" syncWasCalled
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertItemListMatches "expected refreshed login items" refreshedListItemsSummary itemsResponse
+
+    , testCase "background cache refresh fails if \"bw sync\" fails" $ 
+        let
+          agentConfig =
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultStartingBw 
+                    { logoutBehavior = CommandSucceeds "",
+                      unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
+                      listItemsBehaviors =
+                        [ CommandSucceeds listItemsPayload,
+                          CommandSucceeds refreshedListItemsPayload
+                        ],
+                      syncBehavior = 
+                        [ CommandSucceeds ""
+                        , CommandFails ""
+                        ]
+                      
+                    },
+                agentRefreshIntervalSeconds = Just 1
+              }
+
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            let
+              appDataDir = Runtime.bitwardenCliAppDataDir $ runtimePaths agent
+              syncCountFile = appDataDir </> "sync-items-count"
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            syncAttempted <- waitForFileContent syncCountFile "2"
+            itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertBool "expected background sync attempt" syncAttempted
+            assertItemListMatches "expected unrefreshed login items" listItemsSummary itemsResponse
+    , testCase "sending unlock then get-password via the socket returns item id and password" $ 
+        let
+          agentConfig = 
+            defaultAgentConfig
+              { agentBwBehavior =
+                 defaultFailingBw
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
-                      listItemsBehaviors = [CommandFails "bw list items failed"],
                       getPasswordBehavior = CommandSucceeds "super-secret"
                     }
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertEqual
-          "expected password result"
-          (Agent.PasswordResult (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
-          passwordResponse
-    , testCase "sending unlock then get-password via the socket returns failure when bw get password fails" $ do
-        agent <-
-          setupAgent
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual
+              "expected password result"
+              (Agent.PasswordResult (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
+              passwordResponse
+    , testCase "sending unlock then get-password via the socket returns failure when bw get password fails" $ 
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
+                 defaultFailingBw
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
-                      listItemsBehaviors = [CommandFails "bw list items failed"],
                       getPasswordBehavior = CommandFails "item lookup failed"
                     }
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertEqual
-          "expected get-password failure response"
-          (Agent.Failure "item lookup failed")
-          passwordResponse
-    , testCase "sending unlock then get-password via the socket returns failure when bw get password returns an empty password" $ do
-        agent <-
-          setupAgent
+        in 
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual
+              "expected get-password failure response"
+              (Agent.Failure "item lookup failed")
+              passwordResponse
+    , testCase "sending unlock then get-password via the socket returns failure when bw get password returns an empty password" $ 
+        let 
+          agentConfig = 
             defaultAgentConfig
               { agentBwBehavior =
-                  BwBehavior
+                 defaultFailingBw
                     { logoutBehavior = CommandSucceeds "",
                       configServerBehavior = CommandSucceeds "",
                       unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123"),
-                      listItemsBehaviors = [CommandFails "bw list items failed"],
                       getPasswordBehavior = CommandSucceeds ""
                     }
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-        cleanupAgent agent
-        assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-        assertEqual
-          "expected empty password failure response"
-          (Agent.Failure "password was empty")
-          passwordResponse
-    , testCase "sending unlock fails when bw requires a two-factor code" $ do
-        agent <-
-          setupAgent
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
+            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual
+              "expected empty password failure response"
+              (Agent.Failure "password was empty")
+              passwordResponse
+    , testCase "sending unlock fails when bw requires a two-factor code" $ 
+        let
+          agentConfig =
             defaultAgentConfig
               { agentBwBehavior =
-                  defaultFailingBw
+                  defaultStartingBw 
                     { unlockBehavior = LoginRequiresCode }
               }
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
-        finalStatus <- sendRequest (socketPath agent) Agent.Status
-        cleanupAgent agent
-        assertEqual
-          "expected helpful OTP failure response"
-          (Agent.Failure "two-factor code required; run scripts/hwarden-first-login")
-          unlockResponse
-        assertEqual "expected locked status after missing code failure" (Agent.Success "locked") finalStatus
-    , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ do
-        agent <- setupAgent defaultAgentConfig
-        initialStatus <- sendRequest (socketPath agent) Agent.Status
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
-        finalStatus <- sendRequest (socketPath agent) Agent.Status
-        cleanupAgent agent
-        assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
-        assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
-        assertEqual "expected locked status after failed unlock" (Agent.Success "locked") finalStatus
-    , testCase "sending failed unlock then list-items via the socket still reports locked" $ do
-        agent <- setupAgent defaultAgentConfig
-        unlockResponse <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
-        itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-        cleanupAgent agent
-        assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
-        assertEqual "expected locked list-items response after failed unlock" (Agent.Failure "locked") itemsResponse
-    , testCase "sending invalid credentials via the socket results in failure message" $ do
-        agent <- setupAgent defaultAgentConfig
-        response <-
-          sendRequest
-            (socketPath agent)
-            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
-        cleanupAgent agent
-        assertBool "expected failure response" (response /= Agent.Success "unlocked")
-        assertEqual
-          "expected invalid credentials error"
-          (Agent.Failure "credentials were incorrect")
-          response
+        in
+          withReadyAgent agentConfig $ \agent -> do
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            finalStatus <- sendRequest (socketPath agent) Agent.Status
+            assertEqual
+              "expected helpful OTP failure response"
+              (Agent.Failure "two-factor code required; run scripts/hwarden-first-login")
+              unlockResponse
+            assertEqual "expected locked status after missing code failure" (Agent.Success "locked") finalStatus
+    , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ 
+        withReadyAgent defaultStartingAgentConfig $ \agent -> do
+          initialStatus <- sendRequest (socketPath agent) Agent.Status
+          unlockResponse <-
+            sendRequest
+              (socketPath agent)
+              (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+          finalStatus <- sendRequest (socketPath agent) Agent.Status
+          assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
+          assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
+          assertEqual "expected locked status after failed unlock" (Agent.Success "locked") finalStatus
+    , testCase "sending failed unlock then list-items via the socket still reports locked" $ 
+        withReadyAgent defaultStartingAgentConfig $ \agent -> do
+          unlockResponse <-
+            sendRequest
+              (socketPath agent)
+              (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+          itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
+          assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
+          assertEqual "expected locked list-items response after failed unlock" (Agent.Failure "locked") itemsResponse
+    , testCase "sending invalid credentials via the socket results in failure message" $ 
+        withReadyAgent defaultStartingAgentConfig $ \agent -> do
+          response <-
+            sendRequest
+              (socketPath agent)
+              (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
+          assertBool "expected failure response" (response /= Agent.Success "unlocked")
+          assertEqual
+            "expected invalid credentials error"
+            (Agent.Failure "credentials were incorrect")
+            response
     ]
 
-setupAgent :: AgentConfig -> IO AgentResource
-setupAgent agentConfig = do
-  agent <- spawnConfiguredAgent agentConfig
-  waitForSocketReady (socketPath agent)
-  pure agent
+withReadyAgent :: AgentConfig -> (AgentResource -> IO a) -> IO a
+withReadyAgent agentConfig cont = do
+  withConfiguredAgent agentConfig $ \agent -> do
+    waitForSocketReady (socketPath agent)
+    cont agent
 
-cleanupAgent :: AgentResource -> IO ()
-cleanupAgent agent = do
-  terminateProcess (processHandle agent)
-  _ <- waitForProcess (processHandle agent)
-  removeDirectoryRecursive (tempRoot agent)
+withAgent :: FilePath -> FilePath -> [(String, String)] -> (ProcessHandle -> IO a) -> IO a
+withAgent hwardenAgent workDir agentEnv cont =
+  withFile "/dev/null" WriteMode $ \devNull -> do
+    bracket 
+      (acquireProcessHandle devNull)
+      releaseProcessHandle
+      cont
+  where
+    acquireProcessHandle devNull = do
+      (_, _, _, handle) <-
+        createProcess
+          (proc hwardenAgent [])
+            { cwd = Just workDir,
+              env = Just agentEnv,
+              std_out = UseHandle devNull,
+              std_err = UseHandle devNull
+            }
+      return handle
 
-spawnAgent :: FilePath -> FilePath -> [(String, String)] -> IO ProcessHandle
-spawnAgent hwardenAgent workDir agentEnv = do
-  (_, _, _, handle) <-
-    createProcess
-      (proc hwardenAgent [])
-        { cwd = Just workDir,
-          env = Just agentEnv,
-          std_out = Inherit,
-          std_err = Inherit
-        }
-  pure handle
+    releaseProcessHandle handle = do
+      terminateProcess handle
+      void $ waitForProcess handle
 
-spawnConfiguredAgent :: AgentConfig -> IO AgentResource
-spawnConfiguredAgent agentConfig = do
-  tmpDir <- createTempDir "hwarden-agent-test"
-  let paths = Runtime.deriveAgentPaths (tmpDir </> "runtime")
-      fakeBinDir = tmpDir </> "bin"
-      fakeBwPath = fakeBinDir </> "bw"
-      serverUrl = determineBitwardenServerUrl (agentServerUrlOverride agentConfig)
-  createDirectoryIfMissing True (Runtime.runtimeDir paths)
-  createDirectoryIfMissing True fakeBinDir
-  writeFakeBw
-    fakeBwPath
-    (Runtime.bitwardenCliAppDataDir paths)
-    (T.unpack serverUrl)
-    (agentBwBehavior agentConfig)
-  hwardenAgent <- requireAgentExecutable
-  baseEnv <- getEnvironment
-  let agentEnv =
-        buildAgentEnv
-          agentConfig
-          (Runtime.runtimeDir paths)
-          fakeBwPath
-          baseEnv
-  handle <- spawnAgent hwardenAgent tmpDir agentEnv
-  pure
-    AgentResource
-      { socketPath = Runtime.socketPath paths,
-        processHandle = handle,
-        tempRoot = tmpDir
-      }
+withConfiguredAgent :: AgentConfig -> (AgentResource -> IO a) -> IO a
+withConfiguredAgent agentConfig cont =
+  withTempDirectory "/tmp" "hwarden-agent-test" $ \tmpDir -> do
+    let paths = Runtime.deriveAgentPaths (tmpDir </> "runtime")
+        fakeBinDir = tmpDir </> "bin"
+        fakeBwPath = fakeBinDir </> "bw"
+        serverUrl = determineBitwardenServerUrl (agentServerUrl agentConfig)
+    createDirectoryIfMissing True (Runtime.runtimeDir paths)
+    createDirectoryIfMissing True fakeBinDir
+    writeFakeBw
+      fakeBwPath
+      (Runtime.bitwardenCliAppDataDir paths)
+      (T.unpack serverUrl)
+      (agentBwBehavior agentConfig)
+    hwardenAgent <- requireAgentExecutable
+    withAgentEnv
+      agentConfig
+      (Runtime.runtimeDir paths)
+      fakeBwPath $ \agentEnv -> do
+        withAgent hwardenAgent tmpDir agentEnv $ \handle -> 
+          cont $ AgentResource
+              { socketPath = Runtime.socketPath paths,
+                processHandle = handle,
+                runtimePaths = paths,
+                tempRoot = tmpDir
+              }
 
 waitForSocketReady :: FilePath -> IO ()
 waitForSocketReady agentSocketPath = go (200 :: Int)
@@ -583,11 +716,19 @@ sendRequest agentSocketPath request =
       connect conn (SockAddrUnix agentSocketPath)
       pure conn
 
-writeFakeBw :: FilePath -> FilePath -> String -> BwBehavior -> IO ()
+writeFakeBw 
+  :: FilePath 
+  -> FilePath 
+  -> String 
+  -> BwBehavior 
+  -> IO ()
 writeFakeBw fakeBw expectedAppDataDir expectedServerUrl bwBehavior = do
+  let 
+    fakeBwScriptContent = 
+      scriptFor fakeBw expectedAppDataDir expectedServerUrl bwBehavior
   BS8.writeFile
     fakeBw
-    (scriptFor fakeBw expectedAppDataDir expectedServerUrl bwBehavior)
+    fakeBwScriptContent
   permissions <- getPermissions fakeBw
   setPermissions fakeBw permissions {executable = True}
 
@@ -666,7 +807,7 @@ scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior
       "      list_items_count=0",
       "      if [ -f \"$LIST_ITEMS_COUNT_FILE\" ]; then IFS= read -r list_items_count < \"$LIST_ITEMS_COUNT_FILE\"; fi",
       "      printf '%s' $((list_items_count + 1)) > \"$LIST_ITEMS_COUNT_FILE\"",
-      emitIndexedBehavior "      " (listItemsBehaviors bwBehavior),
+      emitIndexedBehavior "list_items_count" "      " (listItemsBehaviors bwBehavior),
       "    else",
       "      printf '%s\\n' 'unsupported list command' 1>&2",
       "      exit 1",
@@ -683,6 +824,21 @@ scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior
       "      printf '%s\\n' 'unsupported get command' 1>&2",
       "      exit 1",
       "    fi",
+      "    ;;",
+      "  sync)",
+      "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/configured\" ]; then",
+      "      printf '%s\\n' 'server was not configured before sync' 1>&2",
+      "      exit 1",
+      "    fi",
+      "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/login-success\" ]; then",
+      "      printf '%s\\n' 'login was not successful before sync' 1>&2",
+      "      exit 1",
+      "    fi",
+      "    SYNC_ITEMS_COUNT_FILE=\"$BITWARDENCLI_APPDATA_DIR/sync-items-count\"",
+      "    sync_items_count=0",
+      "    if [ -f \"$SYNC_ITEMS_COUNT_FILE\" ]; then IFS= read -r sync_items_count < \"$SYNC_ITEMS_COUNT_FILE\"; fi",
+      "    printf '%s' $((sync_items_count + 1)) > \"$SYNC_ITEMS_COUNT_FILE\"",
+      emitIndexedBehavior "sync_items_count" "    " (syncBehavior bwBehavior),
       "    ;;",
       "  *)",
       "    printf '%s\\n' 'unsupported bw command' 1>&2",
@@ -708,15 +864,20 @@ emitBehavior indent commandBehavior =
           "EOF",
           indent <> "exit 1"
         ]
+    CommandArbitrary mkCommand -> mkCommand indent
 
-emitIndexedBehavior :: BS8.ByteString -> [CommandBehavior] -> BS8.ByteString
-emitIndexedBehavior indent commandBehaviors =
+emitIndexedBehavior 
+  :: BS8.ByteString 
+  -> BS8.ByteString 
+  -> [CommandBehavior] 
+  -> BS8.ByteString
+emitIndexedBehavior variableName indent commandBehaviors =
   BS8.unlines $
-    [ indent <> "case \"$list_items_count\" in"
+    [ indent <> "case \"$" <> variableName <> "\" in"
     ]
       <> zipWith (emitIndexedCase indent) [0 :: Int ..] commandBehaviors
       <> [ indent <> "  *)",
-           indent <> "    printf '%s\\n' 'unsupported list command count' 1>&2",
+           indent <> "    printf '%s\\n' 'unsupported command count' 1>&2",
            indent <> "    exit 1",
            indent <> "    ;;",
            indent <> "esac"
@@ -734,9 +895,17 @@ emitLoginBehavior :: BS8.ByteString -> LoginBehavior -> BS8.ByteString
 emitLoginBehavior indent loginBehavior =
   case loginBehavior of
     LoginCommandBehavior commandBehavior ->
-      BS8.unlines
-        [ emitBehavior indent commandBehavior
-        ]
+      case commandBehavior of
+        CommandSucceeds _ -> 
+          BS8.unlines
+            [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/login-success\"",
+              emitBehavior indent commandBehavior
+            ]
+        CommandFails _ ->
+          BS8.unlines
+            [ emitBehavior indent commandBehavior
+            ]
+        CommandArbitrary mkCmd -> mkCmd indent
     LoginRequiresCode ->
       BS8.unlines
         [ indent <> "printf '%s\\n' 'Code is required' 1>&2",
@@ -759,6 +928,7 @@ emitLogoutBehavior indent commandBehavior =
           "EOF",
           indent <> "exit 1"
         ]
+    CommandArbitrary mkCmd -> mkCmd indent
 
 emitConfigBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
 emitConfigBehavior indent commandBehavior =
@@ -775,16 +945,25 @@ emitConfigBehavior indent commandBehavior =
           "EOF",
           indent <> "exit 1"
         ]
+    CommandArbitrary mkCmd -> mkCmd indent
 
 defaultFailingBw :: BwBehavior
 defaultFailingBw =
   BwBehavior
-    { logoutBehavior = CommandSucceeds "",
-      configServerBehavior = CommandSucceeds "",
+    { logoutBehavior = CommandFails "",
+      configServerBehavior = CommandFails "",
       unlockBehavior = LoginCommandBehavior (CommandFails "credentials were incorrect"),
       listItemsBehaviors = [CommandFails "bw list items failed"],
+      syncBehavior = [CommandFails "bw sync failed"],
       getPasswordBehavior = CommandFails "bw get password failed"
     }
+
+-- Behavior from Bitwarden CLI that allows the server to start
+-- listening to the socket
+defaultStartingBw :: BwBehavior
+defaultStartingBw = defaultFailingBw 
+  { configServerBehavior = CommandSucceeds "config success"
+  }
 
 defaultAgentConfig :: AgentConfig
 defaultAgentConfig =
@@ -792,9 +971,14 @@ defaultAgentConfig =
     { agentBwBehavior = defaultFailingBw,
       agentBwPathMode = UseFakeBwPath,
       agentPathOverride = Nothing,
-      agentServerUrlOverride = Nothing,
-      agentRefreshIntervalSecondsOverride = Nothing
+      agentServerUrl = Nothing,
+      agentRefreshIntervalSeconds = Nothing
     }
+
+defaultStartingAgentConfig :: AgentConfig
+defaultStartingAgentConfig = defaultAgentConfig 
+  { agentBwBehavior = defaultStartingBw
+  }
 
 listItemsPayload :: BS8.ByteString
 listItemsPayload =
@@ -870,6 +1054,22 @@ waitForMatchingResponse agentSocketPath request matchesResponse =
         then pure response
         else threadDelay 50000 >> go (retriesRemaining - 1)
 
+waitForFileContent :: FilePath -> BS8.ByteString -> IO Bool
+waitForFileContent path expectedContent =
+  go (60 :: Int)
+  where
+    go 0 = matches
+    go retriesRemaining = do
+      contentMatches <- matches
+      if contentMatches
+        then pure True
+        else threadDelay 50000 >> go (retriesRemaining - 1)
+    matches = do
+      exists <- doesFileExist path
+      if exists
+        then (== expectedContent) <$> BS8.readFile path
+        else pure False
+
 matchesExpectedItems :: [Agent.ItemSummary] -> Agent.Response -> Bool
 matchesExpectedItems expectedItems response =
   case response of
@@ -919,45 +1119,32 @@ withEnvVarOverride key newValue action = do
         Just envValue -> setEnv envKey envValue
         Nothing -> unsetEnv envKey
 
-setEnvVar :: String -> String -> [(String, String)] -> [(String, String)]
-setEnvVar key value envVars = (key, value) : filter ((/= key) . fst) envVars
-
-buildAgentEnv ::
+withAgentEnv ::
   AgentConfig ->
   FilePath ->
   FilePath ->
-  [(String, String)] ->
-  [(String, String)]
-buildAgentEnv agentConfig runtimeDir fakeBwPath =
-  applyRefreshIntervalOverride
-    . applyServerUrlOverride
-    . applyPathOverride
-    . applyBwPathMode
-    . setEnvVar "XDG_RUNTIME_DIR" runtimeDir
+  ([(String, String)] -> IO a) ->
+  IO a
+withAgentEnv agentConfig runtimeDir fakeBwPath cont =
+  withServerUrl
+    . withRefreshInterval
+    . withBwPathMode 
+    . withPathOverride
+    . withEnvVarOverride "XDG_RUNTIME_DIR" (Just runtimeDir) $ 
+        getEnvironment >>= cont
+
   where
-    applyServerUrlOverride =
-      maybe id
-        (setEnvVar "HWARDEN_SERVER_URL")
-        (agentServerUrlOverride agentConfig)
-    applyRefreshIntervalOverride =
-      maybe id
-        (setEnvVar "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS" . show)
-        (agentRefreshIntervalSecondsOverride agentConfig)
-    applyBwPathMode =
+    withServerUrl =
+      withEnvVarOverride "HWARDEN_SERVER_URL"
+        (agentServerUrl agentConfig)
+    withRefreshInterval =
+        withEnvVarOverride "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS"
+        (show <$> agentRefreshIntervalSeconds agentConfig)
+    withBwPathMode =
       case agentBwPathMode agentConfig of
-        UseFakeBwPath -> setEnvVar "HWARDEN_BW_PATH" fakeBwPath
-        OmitBwPath -> id
-    applyPathOverride =
-      maybe id (setEnvVar "PATH") (agentPathOverride agentConfig)
-
-createTempDir :: String -> IO FilePath
-createTempDir prefix = do
-  tempBase <- shortTempDirectory
-  (tempPath, tempHandle) <- openTempFile tempBase prefix
-  hClose tempHandle
-  removeFile tempPath
-  createDirectoryIfMissing True tempPath
-  pure tempPath
-
-shortTempDirectory :: IO FilePath
-shortTempDirectory = pure ("/tmp" :: FilePath)
+        UseFakeBwPath -> withEnvVarOverride "HWARDEN_BW_PATH" (Just fakeBwPath)
+        OmitBwPath -> withEnvVarOverride "HWARDEN_BW_PATH" Nothing
+    withPathOverride = 
+      case agentPathOverride agentConfig of
+        Nothing -> id
+        Just newPath -> withEnvVarOverride "PATH" (Just newPath)
