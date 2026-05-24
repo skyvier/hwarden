@@ -10,9 +10,11 @@ library
     , Hwarden.App
     , Hwarden.Bitwarden
     , Hwarden.Logging
+    , Hwarden.Response
     , Hwarden.Runtime
     , Hwarden.Socket
     , Hwarden.Types
+    , Hwarden.Sanitize
   other-modules:
       Hwarden.Bitwarden.Real
   default-language:    Haskell2010

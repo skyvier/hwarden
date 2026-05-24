@@ -108,7 +108,7 @@ integrationTests =
             response <- sendRequest (socketPath agent) Agent.Status
             assertEqual
               "expected locked status response"
-              (Agent.Success "locked")
+              (Agent.successResponse "locked")
               response
 
     -- setupAgent waits for the daemon to finish startup, and startup always
@@ -253,7 +253,7 @@ integrationTests =
             response <- sendRequest (socketPath agent) Agent.ListItems
             assertEqual
               "expected locked list-items response"
-              (Agent.Failure "locked")
+              (Agent.failureResponse "locked")
               response
     , testCase "sending a get-password request via the socket to a fresh agent process results in a locked failure" $ 
         let
@@ -265,7 +265,7 @@ integrationTests =
             response <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
             assertEqual
               "expected locked get-password response"
-              (Agent.Failure "locked")
+              (Agent.failureResponse "locked")
               response
     , testCase "sending status then successful unlock then status via the socket reports locked then unlocked" $
         let
@@ -283,9 +283,9 @@ integrationTests =
                 (socketPath agent)
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             finalStatus <- sendRequest (socketPath agent) Agent.Status
-            assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-            assertEqual "expected unlocked status after successful unlock" (Agent.Success "unlocked") finalStatus
+            assertEqual "expected initial locked status" (Agent.successResponse "locked") initialStatus
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
+            assertEqual "expected unlocked status after successful unlock" (Agent.successResponse "unlocked") finalStatus
     , testCase "sending unlock then list-items via the socket returns login item summaries" $
         let
           agentConfig =
@@ -304,10 +304,10 @@ integrationTests =
                 (socketPath agent)
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertEqual
               "expected listed login items"
-              (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
+              (Agent.itemListResponse listItemsSummary (Agent.CacheAgeSeconds 0))
               itemsResponse
     , testCase "sending unlock then waiting for the background refresh returns refreshed login item summaries" $ 
         let
@@ -339,7 +339,7 @@ integrationTests =
                   (socketPath agent)
                   Agent.ListItems
                   (matchesExpectedItems refreshedListItemsSummary)
-              assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+              assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
               assertItemListMatches "expected refreshed login items" refreshedListItemsSummary itemsResponse
     , testCase "sending unlock with a failed initial cache fill eventually serves cached items after a background refresh" $
         let
@@ -373,8 +373,8 @@ integrationTests =
                 (socketPath agent)
                 Agent.ListItems
                 (matchesExpectedItems listItemsSummary)
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-            assertEqual "expected cache-unavailable response before refresh succeeds" (Agent.Failure "item cache unavailable") initialItemsResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
+            assertEqual "expected cache-unavailable response before refresh succeeds" (Agent.failureResponse "item cache unavailable") initialItemsResponse
             assertItemListMatches "expected cached items after background refresh succeeds" listItemsSummary recoveredItemsResponse
     , testCase "sending unlock then waiting for a failed background refresh still serves stale cached items" $
         let 
@@ -401,16 +401,16 @@ integrationTests =
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             threadDelay 1200000
             itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
-            case itemsResponse of
-              Agent.ItemList actualItems (Agent.CacheAgeSeconds ageSeconds) -> do
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
+            case Agent.responseItems itemsResponse of
+              Just (actualItems, Agent.CacheAgeSeconds ageSeconds) -> do
                 assertEqual "expected stale cached items after refresh failure" listItemsSummary actualItems
                 assertBool "expected stale cache age after refresh failure" (ageSeconds >= 1)
                 assertBool "expected recent stale cache age after refresh failure" (ageSeconds <= 5)
-              _ ->
+              Nothing ->
                 assertEqual
                   "expected stale cached items after refresh failure"
-                  (Agent.ItemList listItemsSummary (Agent.CacheAgeSeconds 0))
+                  (Agent.itemListResponse listItemsSummary (Agent.CacheAgeSeconds 0))
                   itemsResponse
     , testCase "bw sync is called during cache refresh" $
         let
@@ -458,7 +458,7 @@ integrationTests =
             syncWasCalled <- doesFileExist syncFile
 
             assertBool "bw sync was not called" syncWasCalled
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertItemListMatches "expected refreshed login items" refreshedListItemsSummary itemsResponse
 
     , testCase "background cache refresh fails if \"bw sync\" fails" $ 
@@ -493,7 +493,7 @@ integrationTests =
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             syncAttempted <- waitForFileContent syncCountFile "2"
             itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertBool "expected background sync attempt" syncAttempted
             assertItemListMatches "expected unrefreshed login items" listItemsSummary itemsResponse
     , testCase "sending unlock then get-password via the socket returns item id and password" $ 
@@ -515,10 +515,10 @@ integrationTests =
                 (socketPath agent)
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertEqual
               "expected password result"
-              (Agent.PasswordResult (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
+              (Agent.passwordResultResponse (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
               passwordResponse
     , testCase "sending unlock then get-password via the socket returns failure when bw get password fails" $ 
         let
@@ -539,10 +539,10 @@ integrationTests =
                 (socketPath agent)
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertEqual
               "expected get-password failure response"
-              (Agent.Failure "item lookup failed")
+              (Agent.failureResponse "item lookup failed")
               passwordResponse
     , testCase "sending unlock then get-password via the socket returns failure when bw get password returns an empty password" $ 
         let 
@@ -563,10 +563,10 @@ integrationTests =
                 (socketPath agent)
                 (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
             passwordResponse <- sendRequest (socketPath agent) (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
-            assertEqual "expected successful unlock response" (Agent.Success "unlocked") unlockResponse
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertEqual
               "expected empty password failure response"
-              (Agent.Failure "password was empty")
+              (Agent.failureResponse "password was empty")
               passwordResponse
     , testCase "sending unlock fails when bw requires a two-factor code" $ 
         let
@@ -585,9 +585,9 @@ integrationTests =
             finalStatus <- sendRequest (socketPath agent) Agent.Status
             assertEqual
               "expected helpful OTP failure response"
-              (Agent.Failure "two-factor code required; run scripts/hwarden-first-login")
+              (Agent.failureResponse "two-factor code required; run scripts/hwarden-first-login")
               unlockResponse
-            assertEqual "expected locked status after missing code failure" (Agent.Success "locked") finalStatus
+            assertEqual "expected locked status after missing code failure" (Agent.successResponse "locked") finalStatus
     , testCase "sending status then failed unlock then status via the socket reports locked then still locked" $ 
         withReadyAgent defaultStartingAgentConfig $ \agent -> do
           initialStatus <- sendRequest (socketPath agent) Agent.Status
@@ -596,9 +596,9 @@ integrationTests =
               (socketPath agent)
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
           finalStatus <- sendRequest (socketPath agent) Agent.Status
-          assertEqual "expected initial locked status" (Agent.Success "locked") initialStatus
-          assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
-          assertEqual "expected locked status after failed unlock" (Agent.Success "locked") finalStatus
+          assertEqual "expected initial locked status" (Agent.successResponse "locked") initialStatus
+          assertEqual "expected failed unlock response" (Agent.failureResponse "credentials were incorrect") unlockResponse
+          assertEqual "expected locked status after failed unlock" (Agent.successResponse "locked") finalStatus
     , testCase "sending failed unlock then list-items via the socket still reports locked" $ 
         withReadyAgent defaultStartingAgentConfig $ \agent -> do
           unlockResponse <-
@@ -606,18 +606,18 @@ integrationTests =
               (socketPath agent)
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
           itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
-          assertEqual "expected failed unlock response" (Agent.Failure "credentials were incorrect") unlockResponse
-          assertEqual "expected locked list-items response after failed unlock" (Agent.Failure "locked") itemsResponse
+          assertEqual "expected failed unlock response" (Agent.failureResponse "credentials were incorrect") unlockResponse
+          assertEqual "expected locked list-items response after failed unlock" (Agent.failureResponse "locked") itemsResponse
     , testCase "sending invalid credentials via the socket results in failure message" $ 
         withReadyAgent defaultStartingAgentConfig $ \agent -> do
           response <-
             sendRequest
               (socketPath agent)
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "bad-password"))
-          assertBool "expected failure response" (response /= Agent.Success "unlocked")
+          assertBool "expected failure response" (response /= Agent.successResponse "unlocked")
           assertEqual
             "expected invalid credentials error"
-            (Agent.Failure "credentials were incorrect")
+            (Agent.failureResponse "credentials were incorrect")
             response
     ]
 
@@ -1035,13 +1035,13 @@ refreshedListItemsSummary =
 
 assertItemListMatches :: String -> [Agent.ItemSummary] -> Agent.Response -> IO ()
 assertItemListMatches message expectedItems response =
-  case response of
-    Agent.ItemList actualItems _ ->
+  case Agent.responseItems response of
+    Just (actualItems, _) ->
       assertEqual message expectedItems actualItems
     -- Keep the expected ItemList shape in the failure output when the
     -- response constructor is wrong.
-    _ ->
-      assertEqual message (Agent.ItemList expectedItems (Agent.CacheAgeSeconds 0)) response
+    Nothing ->
+      assertEqual message (Agent.itemListResponse expectedItems (Agent.CacheAgeSeconds 0)) response
 
 waitForMatchingResponse :: FilePath -> Agent.Request -> (Agent.Response -> Bool) -> IO Agent.Response
 waitForMatchingResponse agentSocketPath request matchesResponse =
@@ -1072,9 +1072,9 @@ waitForFileContent path expectedContent =
 
 matchesExpectedItems :: [Agent.ItemSummary] -> Agent.Response -> Bool
 matchesExpectedItems expectedItems response =
-  case response of
-    Agent.ItemList actualItems _ -> actualItems == expectedItems
-    _ -> False
+  case Agent.responseItems response of
+    Just (actualItems, _) -> actualItems == expectedItems
+    Nothing -> False
 
 requireAgentExecutable :: IO FilePath
 requireAgentExecutable =
