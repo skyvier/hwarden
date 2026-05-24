@@ -1,8 +1,9 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
-
 module Hwarden.Agent
   ( Bitwarden (..),
     AgentState (..),
+    FailureMessage (..),
     CacheAgeSeconds (..),
     CacheFillFailure (..),
     CacheEntry (..),
@@ -17,7 +18,7 @@ module Hwarden.Agent
     Password (..),
     PasswordValue (..),
     Request (..),
-    Response (..),
+    Response,
     SessionKey (..),
     UnlockError (..),
     Username (..),
@@ -28,12 +29,20 @@ module Hwarden.Agent
     handleUnlock,
     handleRequest,
     handleRequestWith,
+    failureResponse,
+    itemListResponse,
+    passwordResultResponse,
     prepareRuntimeDir,
     removeExistingSocket,
+    responseErrorText,
+    responseIsFailure,
+    responseItems,
+    responsePasswordResult,
     runAgent,
     cacheAgeSeconds,
     cacheFillFailureFromListItemsError,
     sanitizeUnlockError,
+    successResponse,
     updateItemCacheState
   )
 where
@@ -41,7 +50,6 @@ where
 import UnliftIO.MVar (MVar, modifyMVar, newMVar)
 import Control.Monad.Time (MonadTime, currentTime)
 import Control.Exception (finally)
-import Control.Applicative ((<|>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad (forever, void, when)
 import Control.Monad.Reader (asks)
@@ -68,6 +76,19 @@ import Hwarden.Bitwarden
   )
 import Hwarden.Bitwarden.Real (configureServer)
 import Hwarden.Logging (logInfo)
+import Hwarden.Response
+  ( CacheAgeSeconds (..),
+    FailureMessage (..),
+    Response,
+    failureResponse,
+    itemListResponse,
+    passwordResultResponse,
+    responseErrorText,
+    responseIsFailure,
+    responseItems,
+    responsePasswordResult,
+    successResponse
+  )
 import qualified Hwarden.Runtime as Runtime
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), LoginItemId (..), Password (..), PasswordValue (..), SessionKey (..), Username (..))
@@ -102,12 +123,22 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.Posix.Files (ownerModes, setFileMode)
-import Test.QuickCheck (Arbitrary (arbitrary), Gen, NonNegative (getNonNegative), oneof)
+import Test.QuickCheck (Arbitrary (arbitrary), Gen, oneof)
 import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
 import qualified UnliftIO.Concurrent as Concurrent
 import Control.Monad.Except (runExceptT, ExceptT (..))
 import Data.Bifunctor (first)
+import Hwarden.Sanitize
+  ( Secret (SessionSecret),
+    SanitizedText,
+    getSanitizedText,
+    sanitizeGetPasswordFailure,
+    sanitizeListItemsFailure,
+    sanitizeSyncFailure,
+    sanitizeUnlockError,
+    trustStaticText
+  )
 
 data Request
   = UnlockRequest Username Password
@@ -127,19 +158,6 @@ instance Arbitrary Request where
         pure UnknownRequest
       ]
 
-data Response
-  = Success Text
-  | ItemList [ItemSummary] CacheAgeSeconds
-  | PasswordResult LoginItemId PasswordValue
-  | Failure Text
-  deriving (Eq)
-
-instance Show Response where
-  show (Success message) = "Success " <> show message
-  show (ItemList items cacheAgeSecondsValue) = "ItemList " <> show items <> " " <> show cacheAgeSecondsValue
-  show (PasswordResult loginItemId password) = "PasswordResult " <> show loginItemId <> " " <> show password
-  show (Failure err) = "Failure " <> show err
-
 data LatestRefreshStatus
   = LatestRefreshSucceeded
   | LatestRefreshFailed CacheFillFailure
@@ -147,20 +165,14 @@ data LatestRefreshStatus
 
 data CacheFillFailure
   = CacheFillUnavailable
-  | CacheFillFailed Text
+  | CacheFillFailed (SanitizedText SessionSecret)
   deriving (Eq, Show)
-
-newtype CacheAgeSeconds = CacheAgeSeconds Int
-  deriving (Eq, Show)
-
-instance Arbitrary CacheAgeSeconds where
-  arbitrary = CacheAgeSeconds . getNonNegative <$> arbitrary
 
 instance Arbitrary CacheFillFailure where
   arbitrary =
     oneof
       [ pure CacheFillUnavailable,
-        CacheFillFailed . T.pack <$> arbitrary
+        CacheFillFailed <$> arbitrary
       ]
 
 instance Arbitrary LatestRefreshStatus where
@@ -245,40 +257,6 @@ instance ToJSON Request where
       [ "cmd" .= ("unknown" :: Text)
       ]
 
-instance ToJSON Response where
-  toJSON (Success message) =
-    object
-      [ "ok" .= True,
-        "message" .= message
-      ]
-  toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue)) =
-    object
-      [ "ok" .= True,
-        "items" .= items,
-        "cache_age_seconds" .= cacheAgeSecondsValue
-      ]
-  toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
-    object
-      [ "ok" .= True,
-        "id" .= passwordItemId,
-        "password" .= password
-      ]
-  toJSON (Failure err) =
-    object
-      [ "ok" .= False,
-        "error" .= err
-      ]
-
-instance FromJSON Response where
-  parseJSON = withObject "Response" $ \obj -> do
-    ok <- obj .: "ok"
-    if ok
-      then
-        (PasswordResult . LoginItemId <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
-          <|> (ItemList <$> obj .: "items" <*> (CacheAgeSeconds <$> obj .: "cache_age_seconds"))
-          <|> (Success <$> obj .: "message")
-      else Failure <$> obj .: "error"
-
 runAgent :: IO ()
 runAgent = do
   runtimeDir <- requireRuntimeDir
@@ -340,7 +318,7 @@ handleConnection agentEnv agentStateVar conn =
             case eitherDecodeStrict' raw of
               Left err -> do
                 logRequestDecodeFailure err
-                pure (Failure (T.pack err))
+                pure (failureResponse (StaticFailure (trustStaticText (T.pack err))))
               Right request -> do
                 logRequestReceived request
                 handleRequest agentStateVar request
@@ -383,38 +361,38 @@ data Decision
 decide :: Request -> AgentState -> Decision
 decide (UnlockRequest username password) agentState =
   case agentState of
-    Unlocked _ _ -> Reply (Success "already unlocked")
+    Unlocked _ _ -> Reply (successResponse "already unlocked")
     Locked -> Unlock username password
 decide Status agentState =
   case agentState of
-    Locked -> Reply (Success "locked")
-    Unlocked _ _ -> Reply (Success "unlocked")
+    Locked -> Reply (successResponse "locked")
+    Unlocked _ _ -> Reply (successResponse "unlocked")
 decide ListItems agentState =
   case agentState of
-    Locked -> Reply (Failure "locked")
+    Locked -> Reply (failureResponse "locked")
     Unlocked _ (CacheReady cacheEntry _) -> ListItemsAction cacheEntry
-    Unlocked _ _ -> Reply (Failure "item cache unavailable")
+    Unlocked _ _ -> Reply (failureResponse "item cache unavailable")
 decide (GetPasswordRequest loginItemId) agentState =
   case agentState of
-    Locked -> Reply (Failure "locked")
+    Locked -> Reply (failureResponse "locked")
     Unlocked sessionKey _ -> GetPasswordAction sessionKey loginItemId
-decide UnknownRequest _ = Reply (Failure "unknown request")
+decide UnknownRequest _ = Reply (failureResponse "unknown request")
 
 handleUnlock :: (Bitwarden m, MonadTime m) => Username -> Password -> m (AgentState, Response, [Effect])
 handleUnlock email password = do
   result <- unlock email password
   case result of
     Left UnlockUnavailable ->
-      pure (Locked, Failure "bw login failed", [])
+      pure (Locked, failureResponse "bw login failed", [])
     Left CodeRequired ->
-      pure (Locked, Failure "two-factor code required; run scripts/hwarden-first-login", [])
+      pure (Locked, failureResponse "two-factor code required; run scripts/hwarden-first-login", [])
     Left (UnlockFailed err) ->
-      pure (Locked, Failure (sanitizeUnlockError password err), [])
+      pure (Locked, unlockFailureResponse password err, [])
     Right sessionKey -> do
       cacheState <- buildInitialCacheState sessionKey
       pure
         ( Unlocked sessionKey cacheState,
-          Success "unlocked",
+          successResponse "unlocked",
           [StartCacheRefreshLoop sessionKey]
         )
 
@@ -425,7 +403,7 @@ buildInitialCacheState sessionKey =
 handleListItems :: MonadTime m => CacheEntry -> AgentState -> m (AgentState, Response, [Effect])
 handleListItems cacheEntry agentState = do
   now <- currentTime
-  pure (agentState, ItemList (cacheEntryItems cacheEntry) (cacheAgeSeconds now cacheEntry), [])
+  pure (agentState, itemListResponse (cacheEntryItems cacheEntry) (cacheAgeSeconds now cacheEntry), [])
 
 cacheAgeSeconds :: UTCTime -> CacheEntry -> CacheAgeSeconds
 cacheAgeSeconds now cacheEntry =
@@ -469,9 +447,9 @@ refreshCacheEntry sessionKey = runExceptT $ do
   where
     syncErrorToCacheFailure :: SyncError -> CacheFillFailure
     syncErrorToCacheFailure SyncUnavailable =
-      CacheFillFailed "bw sync was unavailable"
+      syncCacheFillFailure sessionKey "bw sync was unavailable"
     syncErrorToCacheFailure (SyncFailed errMsg) =
-      CacheFillFailed $ "bw sync failed due to " <> errMsg
+      syncCacheFillFailure sessionKey ("bw sync failed due to " <> errMsg)
 
 initialItemCacheState :: Either CacheFillFailure CacheEntry -> ItemCacheState
 initialItemCacheState refreshResult =
@@ -487,7 +465,7 @@ cacheFillFailureFromListItemsError sessionKey listItemsFailure =
     ListItemsUnavailable ->
       CacheFillUnavailable
     ListItemsFailed err ->
-      CacheFillFailed (sanitizeListItemsFailure sessionKey err)
+      listItemsCacheFillFailure sessionKey err
 
 handleRefreshResult :: SessionKey -> Either CacheFillFailure CacheEntry -> AgentState -> (AgentState, Bool)
 handleRefreshResult sessionKey refreshResult agentState =
@@ -527,33 +505,28 @@ handleGetPassword sessionKey loginItemId agentState = do
   let response =
         case result of
           Left GetPasswordUnavailable ->
-            Failure "bw get password failed"
+            failureResponse "bw get password failed"
           Left (GetPasswordFailed err) ->
-            Failure (sanitizeGetPasswordFailure sessionKey err)
+            getPasswordFailureResponse sessionKey err
           Right password ->
-            PasswordResult loginItemId password
+            passwordResultResponse loginItemId password
   pure (agentState, response, [])
 
-sanitizeUnlockError :: Password -> Text -> Text
-sanitizeUnlockError (Password password) err =
-  let sanitized =
-        if T.null password then err else T.replace password "<redacted>" err
-      trimmed = T.strip sanitized
-   in if T.null trimmed then "bw login failed" else trimmed
+unlockFailureResponse :: Password -> Text -> Response
+unlockFailureResponse password err =
+  failureResponse (PasswordSanitizedFailure (sanitizeUnlockError password err))
 
-sanitizeListItemsFailure :: SessionKey -> Text -> Text
-sanitizeListItemsFailure (SessionKey sessionKey) err =
-  let sanitized =
-        if T.null sessionKey then err else T.replace sessionKey "<redacted>" err
-      trimmed = T.strip sanitized
-   in if T.null trimmed then "bw list items failed" else trimmed
+getPasswordFailureResponse :: SessionKey -> Text -> Response
+getPasswordFailureResponse sessionKey err =
+  failureResponse (SessionSanitizedFailure (sanitizeGetPasswordFailure sessionKey err))
 
-sanitizeGetPasswordFailure :: SessionKey -> Text -> Text
-sanitizeGetPasswordFailure (SessionKey sessionKey) err =
-  let sanitized =
-        if T.null sessionKey then err else T.replace sessionKey "<redacted>" err
-      trimmed = T.strip sanitized
-   in if T.null trimmed then "bw get password failed" else trimmed
+listItemsCacheFillFailure :: SessionKey -> Text -> CacheFillFailure
+listItemsCacheFillFailure sessionKey err =
+  CacheFillFailed (sanitizeListItemsFailure sessionKey err)
+
+syncCacheFillFailure :: SessionKey -> Text -> CacheFillFailure
+syncCacheFillFailure sessionKey err =
+  CacheFillFailed (sanitizeSyncFailure sessionKey err)
 
 logRefreshResult :: KatipContext m => Either CacheFillFailure CacheEntry -> Bool -> m ()
 logRefreshResult refreshResult shouldContinue =
@@ -563,7 +536,7 @@ logRefreshResult refreshResult shouldContinue =
     (Left CacheFillUnavailable, True) ->
       logInfo "item cache refresh failed: unavailable"
     (Left (CacheFillFailed err), True) ->
-      logInfo ("item cache refresh failed: " <> err)
+      logInfo ("item cache refresh failed: " <> getSanitizedText err)
     (_, False) ->
       logInfo "stopping item cache refresh loop"
 

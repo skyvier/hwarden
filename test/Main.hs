@@ -205,7 +205,7 @@ encodingTests =
   testGroup
     "encoding"
     [ testCase "success response encoding matches golden file" $
-        assertGoldenEncoding "test/golden/success.json" (Agent.Success "unlocked")
+        assertGoldenEncoding "test/golden/success.json" (Agent.successResponse "unlocked")
     , testCase "unlock request encoding matches expected shape" $
         Aeson.encode
           ( Agent.UnlockRequest
@@ -214,11 +214,11 @@ encodingTests =
           )
           @?= "{\"cmd\":\"unlock\",\"email\":\"me@example.com\",\"password\":\"bad-password\"}"
     , testCase "failure response encoding matches golden file" $
-        assertGoldenEncoding "test/golden/failure.json" (Agent.Failure "boom")
+        assertGoldenEncoding "test/golden/failure.json" (Agent.failureResponse "boom")
     , testCase "item-list response encoding matches golden file" $
         assertGoldenEncoding
           "test/golden/item-list.json"
-          ( Agent.ItemList
+          ( Agent.itemListResponse
               [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com",
                 Agent.ItemSummary "2" "GitHub" "skyvier"
               ]
@@ -227,7 +227,7 @@ encodingTests =
     , testCase "password response encoding matches golden file" $
         assertGoldenEncoding
           "test/golden/password-result.json"
-          (Agent.PasswordResult (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
+          (Agent.passwordResultResponse (Agent.LoginItemId "item-123") (Agent.PasswordValue "super-secret"))
     ]
 
 filesystemTests :: TestTree
@@ -287,17 +287,17 @@ pureStateTransitionTests =
               @?= Agent.Unlock (Agent.Username "me@example.com") (Agent.Password "secret")
         , testCase "given a locked state, a status request replies locked" $
             Agent.decide Agent.Status Agent.Locked
-              @?= Agent.Reply (Agent.Success "locked")
+              @?= Agent.Reply (Agent.successResponse "locked")
         , testCase "given a locked state, a list-items request replies locked failure" $
             Agent.decide Agent.ListItems Agent.Locked
-              @?= Agent.Reply (Agent.Failure "locked")
+              @?= Agent.Reply (Agent.failureResponse "locked")
         , testProperty "given a locked state, a get-password request replies locked failure" $
             propertyDecideGetPasswordLocked
         , testCase "given an unlocked state, an unlock request replies already unlocked" $
             Agent.decide
               (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
               (Agent.Unlocked (Agent.SessionKey "session-key") Agent.CacheNotYetFilled)
-              @?= Agent.Reply (Agent.Success "already unlocked")
+              @?= Agent.Reply (Agent.successResponse "already unlocked")
         , testProperty "given an unlocked state, a status request replies unlocked" $
             propertyDecideStatusUnlocked
         , testProperty "given an unlocked state with cached items, a list-items request triggers a cached list action" $
@@ -306,14 +306,14 @@ pureStateTransitionTests =
             Agent.decide
               Agent.ListItems
               (Agent.Unlocked (Agent.SessionKey "session-key") Agent.CacheNotYetFilled)
-              @?= Agent.Reply (Agent.Failure "item cache unavailable")
+              @?= Agent.Reply (Agent.failureResponse "item cache unavailable")
         , testProperty "given an unlocked state with a failed cache fill, a list-items request replies with cache unavailable" $
             propertyDecideListItemsFailedCacheFill
         , testProperty "given an unlocked state, a get-password request triggers password retrieval for the requested id" $
             propertyDecideGetPasswordUnlocked
         , testCase "given any state, an unknown request replies with failure" $
             Agent.decide Agent.UnknownRequest Agent.Locked
-              @?= Agent.Reply (Agent.Failure "unknown request")
+              @?= Agent.Reply (Agent.failureResponse "unknown request")
         ]
     , testGroup
         "handleRequestWith"
@@ -329,7 +329,7 @@ pureStateTransitionTests =
                     (Agent.handleRequestWith Agent.Status currentState)
              in do
                   newState @?= currentState
-                  response @?= Agent.Success "locked"
+                  response @?= Agent.successResponse "locked"
                   effects @?= []
         , testProperty "given an unlocked state, a status request returns unlocked" $
             propertyHandleRequestWithStatusUnlocked
@@ -341,7 +341,7 @@ pureStateTransitionTests =
                     (Agent.handleRequestWith Agent.ListItems currentState)
              in do
                   newState @?= currentState
-                  response @?= Agent.Failure "locked"
+                  response @?= Agent.failureResponse "locked"
                   effects @?= []
         , testProperty "given an unlocked state with a not-yet-filled cache, a list-items request returns cache unavailable and preserves state" $
             propertyHandleRequestWithListItemsNotYetFilled
@@ -417,7 +417,7 @@ propertyHandleRequestWithUnlockSuccess sessionKey items =
           == Agent.Unlocked
             sessionKey
             (Agent.CacheReady (Agent.CacheEntry items mockNow) Agent.LatestRefreshSucceeded)
-          && response == Agent.Success "unlocked"
+          && response == Agent.successResponse "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 
 propertyHandleRequestWithUnlockCacheFillFailure ::
@@ -433,20 +433,20 @@ propertyHandleRequestWithUnlockCacheFillFailure sessionKey listItemsFailure =
           (Agent.handleRequestWith (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")) Agent.Locked)
    in property $
         newState == Agent.Unlocked sessionKey (Agent.CacheFillError expectedCacheFailure)
-          && response == Agent.Success "unlocked"
+          && response == Agent.successResponse "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 
 propertyDecideGetPasswordLocked :: Agent.LoginItemId -> Property
 propertyDecideGetPasswordLocked loginItemId =
   property $
     Agent.decide (Agent.GetPasswordRequest loginItemId) Agent.Locked
-      == Agent.Reply (Agent.Failure "locked")
+      == Agent.Reply (Agent.failureResponse "locked")
 
 propertyDecideStatusUnlocked :: Agent.SessionKey -> Property
 propertyDecideStatusUnlocked sessionKey =
   property $
     Agent.decide Agent.Status (Agent.Unlocked sessionKey Agent.CacheNotYetFilled)
-      == Agent.Reply (Agent.Success "unlocked")
+      == Agent.Reply (Agent.successResponse "unlocked")
 
 propertyDecideListItemsUnlocked :: Agent.SessionKey -> Agent.CacheEntry -> Agent.LatestRefreshStatus -> Property
 propertyDecideListItemsUnlocked sessionKey cacheEntry latestRefreshStatus =
@@ -462,7 +462,7 @@ propertyDecideListItemsFailedCacheFill sessionKey cacheFillFailure =
     Agent.decide
       Agent.ListItems
       (Agent.Unlocked sessionKey (Agent.CacheFillError cacheFillFailure))
-      == Agent.Reply (Agent.Failure "item cache unavailable")
+      == Agent.Reply (Agent.failureResponse "item cache unavailable")
 
 propertyDecideGetPasswordUnlocked :: Agent.SessionKey -> Agent.LoginItemId -> Property
 propertyDecideGetPasswordUnlocked sessionKey loginItemId =
@@ -479,7 +479,7 @@ propertyHandleRequestWithStatusUnlocked sessionKey =
           (Agent.handleRequestWith Agent.Status currentState)
    in property $
         newState == currentState
-          && response == Agent.Success "unlocked"
+          && response == Agent.successResponse "unlocked"
           && effects == []
 
 propertyHandleRequestWithGetPasswordPreservesState ::
@@ -515,7 +515,7 @@ propertyHandleRequestWithListItemsPreservesState sessionKey cacheEntry latestRef
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
-          && response == Agent.ItemList items (Agent.cacheAgeSeconds mockNow cacheEntry)
+          && response == Agent.itemListResponse items (Agent.cacheAgeSeconds mockNow cacheEntry)
           && effects == []
 
 propertyHandleRequestWithListItemsReportsExactCacheAge ::
@@ -539,7 +539,7 @@ propertyHandleRequestWithListItemsReportsExactCacheAge sessionKey items latestRe
             (Left Bitwarden.SyncUnavailable))
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
-        response == Agent.ItemList items cacheAgeSecondsValue
+        response == Agent.itemListResponse items cacheAgeSecondsValue
           && null effects
 
 propertyHandleRequestWithListItemsNotYetFilled :: Agent.SessionKey -> Property
@@ -556,7 +556,7 @@ propertyHandleRequestWithListItemsNotYetFilled sessionKey =
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
-          && response == Agent.Failure "item cache unavailable"
+          && response == Agent.failureResponse "item cache unavailable"
           && effects == []
 
 propertyHandleRequestWithListItemsFailedCacheFill ::
@@ -576,7 +576,7 @@ propertyHandleRequestWithListItemsFailedCacheFill sessionKey cacheFillFailure =
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
-          && response == Agent.Failure "item cache unavailable"
+          && response == Agent.failureResponse "item cache unavailable"
           && effects == []
 
 propertyHandleRequestWithGetPasswordLocked :: Agent.LoginItemId -> Property
@@ -593,7 +593,7 @@ propertyHandleRequestWithGetPasswordLocked loginItemId =
           (Agent.handleRequestWith (Agent.GetPasswordRequest loginItemId) currentState)
    in property $
         newState == currentState
-          && response == Agent.Failure "locked"
+          && response == Agent.failureResponse "locked"
           && effects == []
 
 propertyHandleRequestWithGetPasswordSuccess :: Agent.SessionKey -> Agent.LoginItemId -> Agent.PasswordValue -> Property
@@ -610,7 +610,7 @@ propertyHandleRequestWithGetPasswordSuccess sessionKey loginItemId passwordValue
           (Agent.handleRequestWith (Agent.GetPasswordRequest loginItemId) currentState)
    in property $
         newState == currentState
-          && response == Agent.PasswordResult loginItemId passwordValue
+          && response == Agent.passwordResultResponse loginItemId passwordValue
           && effects == []
 
 propertyHandleRequestWithUnlockedIgnoresUnlockResult :: Agent.SessionKey -> MockEnv -> Property
@@ -622,7 +622,7 @@ propertyHandleRequestWithUnlockedIgnoresUnlockResult sessionKey mockEnv =
           (Agent.handleRequestWith (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret")) currentState)
    in property $
         newState == currentState
-          && response == Agent.Success "already unlocked"
+          && response == Agent.successResponse "already unlocked"
           && effects == []
 
 propertyHandleRequestWithUnknownRequest :: Agent.AgentState -> MockEnv -> Property
@@ -631,7 +631,7 @@ propertyHandleRequestWithUnknownRequest initialState mockEnv =
         runMockBitwarden mockEnv (Agent.handleRequestWith Agent.UnknownRequest initialState)
    in property $
         newState == initialState
-          && response == Agent.Failure "unknown request"
+          && response == Agent.failureResponse "unknown request"
           && effects == []
 
 propertyHandleRequestWithStatusDoesNotExposeSessionKey :: Agent.AgentState -> Property
@@ -671,7 +671,7 @@ propertyHandleRequestWithListItemsDoesNotExposeSessionKey sessionKey items =
    in itemsDoNotContainSessionKey sessionKey items ==>
         property
           ( newState == currentState
-              && response == Agent.ItemList items (Agent.cacheAgeSeconds mockNow (Agent.CacheEntry items sampleTime))
+              && response == Agent.itemListResponse items (Agent.cacheAgeSeconds mockNow (Agent.CacheEntry items sampleTime))
               && not (sessionKeyAppearsInEncodedResponse sessionKey response)
               && effects == []
           )
@@ -708,7 +708,7 @@ propertyPasswordResultShowDoesNotExposePassword loginItemId passwordText =
       ( let passwordNeedle =
               T.pack ("pw-needle-" <> passwordText <> "-end")
             response =
-              Agent.PasswordResult
+              Agent.passwordResultResponse
                 loginItemId
                 (Agent.PasswordValue passwordNeedle)
             rendered = T.pack (show response)
@@ -785,7 +785,7 @@ propertyHandleListItemsReportsExactCacheAge items initialState cacheAgeSecondsVa
           )
           (Agent.handleListItems cacheEntry initialState)
    in property $
-        response == Agent.ItemList items cacheAgeSecondsValue
+        response == Agent.itemListResponse items cacheAgeSecondsValue
           && null effects
 
 propertyHandleUnlockSuccess :: Agent.SessionKey -> [Agent.ItemSummary] -> Property
@@ -804,7 +804,7 @@ propertyHandleUnlockSuccess sessionKey items =
           == Agent.Unlocked
             sessionKey
             (Agent.CacheReady (Agent.CacheEntry items mockNow) Agent.LatestRefreshSucceeded)
-          && response == Agent.Success "unlocked"
+          && response == Agent.successResponse "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 
 propertyHandleUnlockCacheFillFailure ::
@@ -825,7 +825,7 @@ propertyHandleUnlockCacheFillFailure sessionKey listItemsFailure =
           (Agent.handleUnlock (Agent.Username "me@example.com") (Agent.Password "secret"))
    in property $
         newState == Agent.Unlocked sessionKey (Agent.CacheFillError expectedCacheFailure)
-          && response == Agent.Success "unlocked"
+          && response == Agent.successResponse "unlocked"
           && effects == [Agent.StartCacheRefreshLoop sessionKey]
 
 propertyCacheAgeSecondsIsExact :: [Agent.ItemSummary] -> Agent.CacheAgeSeconds -> Property
@@ -882,13 +882,14 @@ propertyUpdateItemCacheStateFailureWithoutReadyCache previousFailure newFailure 
           && failedCacheFillResult == Agent.CacheFillError newFailure
 
 expectedFailure :: Agent.UnlockError -> Agent.Response
-expectedFailure Agent.UnlockUnavailable = Agent.Failure "bw login failed"
-expectedFailure Agent.CodeRequired = Agent.Failure "two-factor code required; run scripts/hwarden-first-login"
-expectedFailure (Agent.UnlockFailed err) = Agent.Failure (Agent.sanitizeUnlockError (Agent.Password "secret") err)
+expectedFailure Agent.UnlockUnavailable = Agent.failureResponse "bw login failed"
+expectedFailure Agent.CodeRequired = Agent.failureResponse "two-factor code required; run scripts/hwarden-first-login"
+expectedFailure (Agent.UnlockFailed err) =
+  Agent.failureResponse (Agent.PasswordSanitizedFailure (Agent.sanitizeUnlockError (Agent.Password "secret") err))
 
 statusResponseMatchesState :: Agent.AgentState -> Agent.Response -> Bool
-statusResponseMatchesState Agent.Locked response = response == Agent.Success "locked"
-statusResponseMatchesState (Agent.Unlocked _ _) response = response == Agent.Success "unlocked"
+statusResponseMatchesState Agent.Locked response = response == Agent.successResponse "locked"
+statusResponseMatchesState (Agent.Unlocked _ _) response = response == Agent.successResponse "unlocked"
 
 statusResponseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 statusResponseLeaksSessionKey Agent.Locked _ = False
@@ -900,8 +901,7 @@ sessionKeyAppearsInEncodedResponse (Agent.SessionKey sessionKey) response =
   TE.encodeUtf8 sessionKey `BS.isInfixOf` encodedResponse response
 
 isFailure :: Agent.Response -> Bool
-isFailure (Agent.Failure _) = True
-isFailure _ = False
+isFailure = Agent.responseIsFailure
 
 runMockBitwarden :: MockEnv -> MockBitwarden a -> a
 runMockBitwarden mockEnv (MockBitwarden run) = run mockEnv
@@ -915,7 +915,7 @@ encodedResponse = LBS.toStrict . Aeson.encode
 
 itemsDoNotContainSessionKey :: Agent.SessionKey -> [Agent.ItemSummary] -> Bool
 itemsDoNotContainSessionKey (Agent.SessionKey sessionText) items =
-  not (TE.encodeUtf8 sessionText `BS.isInfixOf` encodedResponse (Agent.ItemList [] (Agent.CacheAgeSeconds 0)))
+  not (TE.encodeUtf8 sessionText `BS.isInfixOf` encodedResponse (Agent.itemListResponse [] (Agent.CacheAgeSeconds 0)))
     && all itemDoesNotContainSessionKey items
   where
     encodedSessionKey = TE.encodeUtf8 sessionText
