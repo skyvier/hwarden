@@ -1,0 +1,9 @@
+#!/bin/sh
+
+while true; do
+  git ls-files -cdmo --exclude-standard |
+    grep -E '(\.hs$|\.cabal$|^cabal\.project|^test/|^src/|^app/)' |
+    entr -d -c cabal test all \
+      --test-show-details=direct \
+      --test-options='--hide-successes'
+done

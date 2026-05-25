@@ -74,6 +74,7 @@ hpkgs.shellFor {
     pkgs.xclip
     pkgs.ghcid
     pkgs.glow
+    pkgs.entr
     bitwardenCli
     wrappedHwardenAgent
   ];

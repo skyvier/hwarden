@@ -53,6 +53,18 @@ test-suite hwarden-agent-test
   hs-source-dirs:      test
   other-modules:
       Integration
+    , Test.MockEnv
+    , Test.Sanitization 
+    , Test.Cache
+    , Test.StateMachine
+    , Test.RequestHandler
+    , Test.RequestHandler.Unlock
+    , Test.RequestHandler.Status
+    , Test.RequestHandler.ListItems
+    , Test.RequestHandler.GetPassword
+    , Test.Helpers
+    , Test.Agent.Decide
+    , Test.JsonCodec
   default-language:    Haskell2010
   build-tool-depends:  hwarden-agent:hwarden-agent
   build-depends:
