@@ -52,7 +52,7 @@ test-suite hwarden-agent-test
   main-is:             Main.hs
   hs-source-dirs:      test
   other-modules:
-      Integration
+      Test.Integration
     , Test.MockEnv
     , Test.Sanitization 
     , Test.Cache

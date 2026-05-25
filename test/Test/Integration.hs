@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Integration (integrationTests) where
+module Test.Integration (tests) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
@@ -90,8 +90,8 @@ data AgentResource = AgentResource
     tempRoot :: FilePath
   }
 
-integrationTests :: TestTree
-integrationTests =
+tests :: TestTree
+tests =
   testGroup
     "integration"
     [ testCase "sending a status request via the socket to a fresh agent process results in a locked response" $

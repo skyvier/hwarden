@@ -4,7 +4,6 @@ module Main where
 
 import qualified Data.ByteString as BS
 import Data.Bits ((.&.))
-import Integration (integrationTests)
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.App as App
 import qualified Hwarden.Bitwarden as Bitwarden
@@ -24,7 +23,6 @@ import System.Posix.Files
   )
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
-import Test.Helpers
 
 import qualified Test.Sanitization as Sanitization
 import qualified Test.Cache as Cache
@@ -32,6 +30,7 @@ import qualified Test.Agent.Decide as Agent.Decide
 import qualified Test.StateMachine as StateMachine
 import qualified Test.RequestHandler as RequestHandler
 import qualified Test.JsonCodec as JsonCodec
+import qualified Test.Integration as Integration
 
   
 main :: IO ()
@@ -43,7 +42,6 @@ tests =
     "hwarden-agent"
     [ 
       filesystemTests,
-      integrationTests,
 
       Sanitization.tests,
       Cache.tests,
@@ -51,6 +49,7 @@ tests =
       StateMachine.tests,
       RequestHandler.tests,
       JsonCodec.tests,
+      Integration.tests,
 
       bitwardenServerUrlTests,
       bitwardenCliPathTests
