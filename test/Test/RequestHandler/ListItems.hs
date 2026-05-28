@@ -3,7 +3,7 @@
 module Test.RequestHandler.ListItems (tests) where
 
 import Data.Function ((&))
-  
+
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
@@ -12,6 +12,7 @@ import Test.Helpers
 import Test.MockEnv
 
 import qualified Hwarden.Agent as Agent
+import Hwarden.Cache (cacheAgeSeconds)
 
 tests :: TestTree 
 tests = testGroup "list-items"
@@ -85,7 +86,7 @@ propertyHandleRequestWithListItemsPreservesState sessionKey cacheEntry latestRef
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
-          && response == Agent.itemListResponse items (Agent.cacheAgeSeconds mockNow cacheEntry)
+          && response == Agent.itemListResponse items (cacheAgeSeconds mockNow cacheEntry)
           && effects == []
 
 propertyHandleRequestWithListItemsReportsExactCacheAge ::
