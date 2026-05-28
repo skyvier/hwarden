@@ -21,6 +21,7 @@ module Hwarden.Agent
     Request (..),
     Command (..),
     fromCommandIdentifier,
+    toCommandIdentifier,
     Response,
     SessionKey (..),
     UnlockError (..),
@@ -218,7 +219,7 @@ data Command
   | StatusCommand
   | ListItemsCommand
   | GetPasswordCommand 
-  deriving (Eq, Enum, Bounded)
+  deriving (Eq, Show, Enum, Bounded)
 
 instance Arbitrary Command where
   arbitrary = elements [minBound..maxBound]
