@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Test.MockEnv
@@ -15,8 +16,10 @@ where
 
 import Data.Time.Clock (UTCTime)
 import Control.Monad.Time
+import GHC.Generics (Generic)
 
-import Test.QuickCheck (Arbitrary (arbitrary))
+import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
+import Test.QuickCheck.Instances.Time ()
 
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
@@ -59,11 +62,12 @@ data MockEnv = MockEnv
     getPasswordResult :: Either Bitwarden.GetPasswordError Agent.PasswordValue,
     mockCurrentTime :: UTCTime
   }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 instance Arbitrary MockEnv where
   arbitrary =
     MockEnv <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary <*> pure mockNow
+  shrink = genericShrink
 
 mockNow :: UTCTime
 mockNow = read "2026-05-20 12:00:05 UTC"

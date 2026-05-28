@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Hwarden.Response
@@ -27,6 +28,7 @@ import Data.Aeson
   )
 import Data.String (IsString (fromString))
 import Data.Text (Text)
+import GHC.Generics (Generic)
 import Hwarden.Sanitize
   ( SanitizedText,
     Secret (PasswordSecret, SessionSecret, Static),
@@ -38,7 +40,10 @@ import Hwarden.Types
     LoginItemId (LoginItemId),
     PasswordValue (PasswordValue)
   )
-import Test.QuickCheck (Arbitrary (arbitrary), NonNegative (getNonNegative))
+import Test.QuickCheck (NonNegative (getNonNegative), oneof)
+import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
+import Test.QuickCheck.Instances.Text ()
+import qualified Data.Text as T
 
 newtype CacheAgeSeconds = CacheAgeSeconds Int
   deriving (Eq, Show)
@@ -50,23 +55,76 @@ data FailureMessage
   = StaticFailure (SanitizedText Static)
   | PasswordSanitizedFailure (SanitizedText PasswordSecret)
   | SessionSanitizedFailure (SanitizedText SessionSecret)
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 instance IsString FailureMessage where
   fromString = StaticFailure . fromString
+
+instance Arbitrary FailureMessage where
+  arbitrary = 
+    oneof
+      [ StaticFailure . trustStaticText . T.pack <$> arbitrary,
+        PasswordSanitizedFailure <$> arbitrary,
+        SessionSanitizedFailure <$> arbitrary
+      ]
+  shrink = genericShrink
 
 data Response
   = Success Text
   | ItemList [ItemSummary] CacheAgeSeconds
   | PasswordResult LoginItemId PasswordValue
   | Failure FailureMessage
-  deriving (Eq)
+  deriving (Eq, Generic)
 
 instance Show Response where
   show (Success message) = "Success " <> show message
   show (ItemList items cacheAgeSecondsValue) = "ItemList " <> show items <> " " <> show cacheAgeSecondsValue
   show (PasswordResult loginItemId password) = "PasswordResult " <> show loginItemId <> " " <> show password
   show (Failure err) = "Failure " <> show err
+
+instance ToJSON Response where
+  toJSON (Success message) =
+    object
+      [ "ok" .= True,
+        "message" .= message
+      ]
+  toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue)) =
+    object
+      [ "ok" .= True,
+        "items" .= items,
+        "cache_age_seconds" .= cacheAgeSecondsValue
+      ]
+  toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
+    object
+      [ "ok" .= True,
+        "id" .= passwordItemId,
+        "password" .= password
+      ]
+  toJSON (Failure err) =
+    object
+      [ "ok" .= False,
+        "error" .= renderFailureMessage err
+      ]
+
+instance FromJSON Response where
+  parseJSON = withObject "Response" $ \obj -> do
+    ok <- obj .: "ok"
+    if ok
+      then
+        (PasswordResult . LoginItemId <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
+          <|> (ItemList <$> obj .: "items" <*> (CacheAgeSeconds <$> obj .: "cache_age_seconds"))
+          <|> (Success <$> obj .: "message")
+      else Failure . StaticFailure . trustStaticText <$> obj .: "error"
+
+instance Arbitrary Response where
+  arbitrary = 
+    oneof
+      [ successResponse . T.pack <$> arbitrary,
+        itemListResponse <$> arbitrary <*> arbitrary,
+        passwordResultResponse <$> arbitrary <*> arbitrary,
+        failureResponse <$> arbitrary
+      ]
+  shrink = genericShrink
 
 successResponse :: Text -> Response
 successResponse = Success
@@ -105,37 +163,3 @@ renderFailureMessage failureMessage =
       getSanitizedText message
     SessionSanitizedFailure message ->
       getSanitizedText message
-
-instance ToJSON Response where
-  toJSON (Success message) =
-    object
-      [ "ok" .= True,
-        "message" .= message
-      ]
-  toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue)) =
-    object
-      [ "ok" .= True,
-        "items" .= items,
-        "cache_age_seconds" .= cacheAgeSecondsValue
-      ]
-  toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
-    object
-      [ "ok" .= True,
-        "id" .= passwordItemId,
-        "password" .= password
-      ]
-  toJSON (Failure err) =
-    object
-      [ "ok" .= False,
-        "error" .= renderFailureMessage err
-      ]
-
-instance FromJSON Response where
-  parseJSON = withObject "Response" $ \obj -> do
-    ok <- obj .: "ok"
-    if ok
-      then
-        (PasswordResult . LoginItemId <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
-          <|> (ItemList <$> obj .: "items" <*> (CacheAgeSeconds <$> obj .: "cache_age_seconds"))
-          <|> (Success <$> obj .: "message")
-      else Failure . StaticFailure . trustStaticText <$> obj .: "error"

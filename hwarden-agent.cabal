@@ -29,6 +29,7 @@ library
     , network
     , process
     , QuickCheck
+    , quickcheck-instances
     , random
     , text
     , time
@@ -79,6 +80,7 @@ test-suite hwarden-agent-test
     , network
     , process
     , QuickCheck
+    , quickcheck-instances
     , random
     , tasty
     , tasty-hunit

@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -20,9 +21,12 @@ module Hwarden.Sanitize
 
 import Data.Text
 import qualified Data.Text as T
+import GHC.Generics (Generic)
 import Hwarden.Types (Password (..), SessionKey (..))
 import Test.QuickCheck
 import Data.String (IsString (fromString))
+import Test.QuickCheck.Arbitrary (genericShrink)
+import Test.QuickCheck.Instances.Text ()
 
 data Secret 
   = Static
@@ -31,6 +35,7 @@ data Secret
 
 newtype SanitizedText (secretType :: Secret) 
   = SanitizedText { getSanitizedText :: Text }
+  deriving stock (Generic)
   deriving newtype (Eq, Show)
 
 type role SanitizedText nominal
@@ -41,14 +46,20 @@ instance IsString (SanitizedText Static) where
 trustStaticText :: Text -> SanitizedText Static
 trustStaticText = SanitizedText
 
+instance Arbitrary (SanitizedText Static) where
+  arbitrary = SanitizedText . T.pack <$> arbitrary
+  shrink = genericShrink
+
 instance Arbitrary (SanitizedText PasswordSecret) where
   arbitrary = mkPasswordSanitized . T.pack <$> arbitrary
+  shrink = genericShrink
 
 mkPasswordSanitized :: Text -> SanitizedText PasswordSecret
 mkPasswordSanitized = SanitizedText 
 
 instance Arbitrary (SanitizedText SessionSecret) where
   arbitrary = mkSessionSanitized . T.pack <$> arbitrary
+  shrink = genericShrink
 
 mkSessionSanitized :: Text -> SanitizedText SessionSecret
 mkSessionSanitized = SanitizedText 
