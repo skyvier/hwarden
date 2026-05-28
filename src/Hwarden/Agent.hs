@@ -43,8 +43,7 @@ module Hwarden.Agent
     responsePasswordResult,
     runAgent,
     sanitizeUnlockError,
-    successResponse,
-    updateItemCacheState
+    successResponse
   )
 where
 
@@ -66,20 +65,29 @@ import Data.Aeson
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
+import qualified Data.Text as T
 import GHC.Generics (Generic)
-import Data.Time.Clock (UTCTime, diffUTCTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Hwarden.Bitwarden
-  ( Bitwarden (getPassword, listItems, unlock),
+  ( Bitwarden (getPassword, unlock),
     GetPasswordError (..),
     ListItemsError (..),
-    UnlockError (..), SyncError (..), sync
+    UnlockError (..),
   )
 import Hwarden.Bitwarden.Real (configureServer)
+import Hwarden.Cache
+  ( CacheAgeSeconds (..),
+    CacheEntry (..),
+    CacheFillFailure (..),
+    ItemCacheState (..),
+    LatestRefreshStatus (..),
+    buildInitialCacheState,
+    cacheAgeSeconds,
+    refreshCacheEntry,
+    updateItemCacheState
+  )
 import Hwarden.Logging (logInfo)
 import Hwarden.Response
-  ( CacheAgeSeconds (..),
-    FailureMessage (..),
+  ( FailureMessage (..),
     Response,
     failureResponse,
     itemListResponse,
@@ -124,20 +132,15 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.Posix.Files (ownerModes, setFileMode)
-import Test.QuickCheck (Arbitrary (arbitrary), Gen, elements, oneof)
-import Test.QuickCheck.Arbitrary (genericShrink, shrink)
+import Test.QuickCheck (elements, oneof)
+import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
+import Test.QuickCheck.Instances.Text ()
 import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
 import qualified UnliftIO.Concurrent as Concurrent
-import Control.Monad.Except (runExceptT, ExceptT (..))
-import Data.Bifunctor (first)
 import Hwarden.Sanitize
-  ( Secret (SessionSecret),
-    SanitizedText,
-    getSanitizedText,
+  ( getSanitizedText,
     sanitizeGetPasswordFailure,
-    sanitizeListItemsFailure,
-    sanitizeSyncFailure,
     sanitizeUnlockError,
     trustStaticText
   )
@@ -151,121 +154,27 @@ data Request
   deriving (Eq, Generic)
 
 instance Show Request where
-  show (UnlockRequest username _) =
+  show (UnlockRequest username _) = 
     "unlock (" <> show username <> ")"
   show Status = "status"
   show ListItems = "list-items"
-  show (GetPasswordRequest loginItemId) =
+  show (GetPasswordRequest loginItemId) = 
     "get-password (" <> show loginItemId <> ")"
   show UnknownRequest = "unknown-request"
-
-instance Arbitrary Request where
-  arbitrary =
-    oneof
-      [ UnlockRequest <$> arbitrary <*> arbitrary,
-        pure Status,
-        pure ListItems,
-        GetPasswordRequest <$> arbitrary,
-        pure UnknownRequest
-      ]
-  shrink = genericShrink
-
-data Command
-  = UnlockCommand
-  | StatusCommand
-  | ListItemsCommand
-  | GetPasswordCommand
-  deriving (Eq, Enum, Bounded)
-
-instance Arbitrary Command where
-  arbitrary = elements [minBound .. maxBound]
-  shrink _ = []
-
-requestCommand :: Request -> Maybe Command
-requestCommand (UnlockRequest _ _) = Just UnlockCommand
-requestCommand Status = Just StatusCommand
-requestCommand ListItems = Just ListItemsCommand
-requestCommand (GetPasswordRequest _) = Just GetPasswordCommand
-requestCommand UnknownRequest = Nothing
-
-data LatestRefreshStatus
-  = LatestRefreshSucceeded
-  | LatestRefreshFailed CacheFillFailure
-  deriving (Eq, Show)
-
-data CacheFillFailure
-  = CacheFillUnavailable
-  | CacheFillFailed (SanitizedText SessionSecret)
-  deriving (Eq, Show)
-
-instance Arbitrary CacheFillFailure where
-  arbitrary =
-    oneof
-      [ pure CacheFillUnavailable,
-        CacheFillFailed <$> arbitrary
-      ]
-
-instance Arbitrary LatestRefreshStatus where
-  arbitrary =
-    oneof
-      [ pure LatestRefreshSucceeded,
-        LatestRefreshFailed <$> arbitrary
-      ]
-
-data CacheEntry = CacheEntry
-  { cacheEntryItems :: [ItemSummary],
-    cacheEntryRefreshedAt :: UTCTime
-  }
-  deriving (Eq, Show)
-
-instance Arbitrary CacheEntry where
-  arbitrary =
-    CacheEntry <$> arbitrary <*> arbitraryUtcTime
-
-data ItemCacheState
-  = CacheNotYetFilled
-  | CacheFillError CacheFillFailure
-  | CacheReady CacheEntry LatestRefreshStatus
-  deriving (Eq, Show)
-
-instance Arbitrary ItemCacheState where
-  arbitrary =
-    oneof
-      [ pure CacheNotYetFilled,
-        CacheFillError <$> arbitrary,
-        CacheReady <$> arbitrary <*> arbitrary
-      ]
-
-data AgentState
-  = Locked
-  | Unlocked SessionKey ItemCacheState
-  deriving (Eq, Show, Generic)
-
-instance Arbitrary AgentState where
-  arbitrary = do
-    maybeSessionKey <- arbitrary
-    case maybeSessionKey of
-      Nothing -> pure Locked
-      Just sessionKey -> Unlocked sessionKey <$> arbitrary
-  shrink = genericShrink
-
-arbitraryUtcTime :: Gen UTCTime
-arbitraryUtcTime =
-  posixSecondsToUTCTime . fromInteger . abs <$> arbitrary
 
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
     cmd <- obj .: "cmd"
     case fromCommandIdentifier (cmd :: Text) of
-      Just UnlockCommand ->
+      Just UnlockCommand -> 
         UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
-      Just StatusCommand ->
+      Just StatusCommand -> 
         pure Status
-      Just ListItemsCommand ->
+      Just ListItemsCommand -> 
         pure ListItems
-      Just GetPasswordCommand ->
+      Just GetPasswordCommand -> 
         GetPasswordRequest . LoginItemId <$> obj .: "id"
-      Nothing ->
+      Nothing -> 
         pure UnknownRequest
 
 instance ToJSON Request where
@@ -281,7 +190,7 @@ instance ToJSON Request where
       ]
   toJSON ListItems =
     object
-      [ "cmd" .= toCommandIdentifier ListItemsCommand
+      [ "cmd" .= toCommandIdentifier ListItemsCommand 
       ]
   toJSON (GetPasswordRequest (LoginItemId passwordItemId)) =
     object
@@ -292,6 +201,38 @@ instance ToJSON Request where
     object
       [ "cmd" .= ("unknown" :: Text)
       ]
+
+instance Arbitrary Request where
+  arbitrary =
+    oneof
+      [ UnlockRequest <$> arbitrary <*> arbitrary,
+        pure Status,
+        pure ListItems,
+        GetPasswordRequest <$> arbitrary,
+        pure UnknownRequest
+      ]
+  shrink = genericShrink
+
+data Command 
+  = UnlockCommand
+  | StatusCommand
+  | ListItemsCommand
+  | GetPasswordCommand 
+  deriving (Eq, Enum, Bounded)
+
+instance Arbitrary Command where
+  arbitrary = elements [minBound..maxBound]
+  shrink _ = []
+
+-- TODO: If this is actually needed, write a property test for this
+requestCommand :: Request -> Maybe Command
+requestCommand (UnlockRequest _ _) = Just UnlockCommand
+requestCommand Status = Just StatusCommand
+requestCommand ListItems = Just ListItemsCommand
+requestCommand (GetPasswordRequest _) = Just GetPasswordCommand
+requestCommand UnknownRequest = Nothing
+
+-- TODO: write roundtrip tests for these
 
 toCommandIdentifier :: Command -> Text
 toCommandIdentifier UnlockCommand = "unlock"
@@ -305,6 +246,19 @@ fromCommandIdentifier "status" = Just StatusCommand
 fromCommandIdentifier "list-items" = Just ListItemsCommand
 fromCommandIdentifier "get-password" = Just GetPasswordCommand
 fromCommandIdentifier _ = Nothing
+
+data AgentState
+  = Locked
+  | Unlocked SessionKey ItemCacheState
+  deriving (Eq, Show, Generic)
+
+instance Arbitrary AgentState where
+  arbitrary = do
+    maybeSessionKey <- arbitrary
+    case maybeSessionKey of
+      Nothing -> pure Locked
+      Just sessionKey -> Unlocked sessionKey <$> arbitrary
+  shrink = genericShrink
 
 runAgent :: IO ()
 runAgent = do
@@ -445,18 +399,10 @@ handleUnlock email password = do
           [StartCacheRefreshLoop sessionKey]
         )
 
-buildInitialCacheState :: (Bitwarden m, MonadTime m) => SessionKey -> m ItemCacheState
-buildInitialCacheState sessionKey =
-  initialItemCacheState <$> refreshCacheEntry sessionKey
-
 handleListItems :: MonadTime m => CacheEntry -> AgentState -> m (AgentState, Response, [Effect])
 handleListItems cacheEntry agentState = do
   now <- currentTime
   pure (agentState, itemListResponse (cacheEntryItems cacheEntry) (cacheAgeSeconds now cacheEntry), [])
-
-cacheAgeSeconds :: UTCTime -> CacheEntry -> CacheAgeSeconds
-cacheAgeSeconds now cacheEntry =
-  CacheAgeSeconds (floor (diffUTCTime now (cacheEntryRefreshedAt cacheEntry)))
 
 runEffect :: MVar AgentState -> Effect -> AgentT ()
 runEffect agentStateVar effect =
@@ -484,38 +430,6 @@ startRefreshLoop agentStateVar sessionKey = do
       when shouldContinue $
         refreshLoop refreshIntervalMicroseconds
 
-refreshCacheEntry :: (Bitwarden m, MonadTime m) => SessionKey -> m (Either CacheFillFailure CacheEntry)
-refreshCacheEntry sessionKey = runExceptT $ do
-  ExceptT $ first syncErrorToCacheFailure <$> sync sessionKey
-  items <- 
-    ExceptT $ first (cacheFillFailureFromListItemsError sessionKey) <$> listItems sessionKey
-  now <- currentTime
-  pure $ CacheEntry items now
-
-
-  where
-    syncErrorToCacheFailure :: SyncError -> CacheFillFailure
-    syncErrorToCacheFailure SyncUnavailable =
-      syncCacheFillFailure sessionKey "bw sync was unavailable"
-    syncErrorToCacheFailure (SyncFailed errMsg) =
-      syncCacheFillFailure sessionKey ("bw sync failed due to " <> errMsg)
-
-initialItemCacheState :: Either CacheFillFailure CacheEntry -> ItemCacheState
-initialItemCacheState refreshResult =
-  case refreshResult of
-    Right cacheEntry ->
-      CacheReady cacheEntry LatestRefreshSucceeded
-    Left cacheFillFailure ->
-      CacheFillError cacheFillFailure
-
-cacheFillFailureFromListItemsError :: SessionKey -> ListItemsError -> CacheFillFailure
-cacheFillFailureFromListItemsError sessionKey listItemsFailure =
-  case listItemsFailure of
-    ListItemsUnavailable ->
-      CacheFillUnavailable
-    ListItemsFailed err ->
-      listItemsCacheFillFailure sessionKey err
-
 handleRefreshResult :: SessionKey -> Either CacheFillFailure CacheEntry -> AgentState -> (AgentState, Bool)
 handleRefreshResult sessionKey refreshResult agentState =
   case classifyRefreshOwnership sessionKey agentState of
@@ -538,16 +452,6 @@ classifyRefreshOwnership sessionKey agentState =
           RefreshWorkerOwnsSession currentSessionKey itemCacheState
     _ -> RefreshWorkerNoLongerOwnsSession
 
-updateItemCacheState :: ItemCacheState -> Either CacheFillFailure CacheEntry -> ItemCacheState
-updateItemCacheState itemCacheState refreshResult =
-  case (itemCacheState, refreshResult) of
-    (_, Right cacheEntry) ->
-      CacheReady cacheEntry LatestRefreshSucceeded
-    (CacheReady cacheEntry _, Left cacheFillFailure) ->
-      CacheReady cacheEntry (LatestRefreshFailed cacheFillFailure)
-    (_, Left cacheFillFailure) ->
-      CacheFillError cacheFillFailure
-
 handleGetPassword :: Bitwarden m => SessionKey -> LoginItemId -> AgentState -> m (AgentState, Response, [Effect])
 handleGetPassword sessionKey loginItemId agentState = do
   result <- getPassword sessionKey loginItemId
@@ -568,14 +472,6 @@ unlockFailureResponse password err =
 getPasswordFailureResponse :: SessionKey -> Text -> Response
 getPasswordFailureResponse sessionKey err =
   failureResponse (SessionSanitizedFailure (sanitizeGetPasswordFailure sessionKey err))
-
-listItemsCacheFillFailure :: SessionKey -> Text -> CacheFillFailure
-listItemsCacheFillFailure sessionKey err =
-  CacheFillFailed (sanitizeListItemsFailure sessionKey err)
-
-syncCacheFillFailure :: SessionKey -> Text -> CacheFillFailure
-syncCacheFillFailure sessionKey err =
-  CacheFillFailed (sanitizeSyncFailure sessionKey err)
 
 logRefreshResult :: KatipContext m => Either CacheFillFailure CacheEntry -> Bool -> m ()
 logRefreshResult refreshResult shouldContinue =

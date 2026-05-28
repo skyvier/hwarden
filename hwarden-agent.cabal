@@ -9,6 +9,7 @@ library
       Hwarden.Agent
     , Hwarden.App
     , Hwarden.Bitwarden
+    , Hwarden.Cache
     , Hwarden.Logging
     , Hwarden.Response
     , Hwarden.Runtime
