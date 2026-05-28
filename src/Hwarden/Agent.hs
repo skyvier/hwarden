@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Hwarden.Agent
   ( Bitwarden (..),
@@ -18,6 +19,8 @@ module Hwarden.Agent
     Password (..),
     PasswordValue (..),
     Request (..),
+    Command (..),
+    fromCommandIdentifier,
     Response,
     SessionKey (..),
     UnlockError (..),
@@ -39,8 +42,6 @@ module Hwarden.Agent
     responseItems,
     responsePasswordResult,
     runAgent,
-    cacheAgeSeconds,
-    cacheFillFailureFromListItemsError,
     sanitizeUnlockError,
     successResponse,
     updateItemCacheState
@@ -65,7 +66,7 @@ import Data.Aeson
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
-import qualified Data.Text as T
+import GHC.Generics (Generic)
 import Data.Time.Clock (UTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Hwarden.Bitwarden
@@ -123,7 +124,8 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.Posix.Files (ownerModes, setFileMode)
-import Test.QuickCheck (Arbitrary (arbitrary), Gen, oneof)
+import Test.QuickCheck (Arbitrary (arbitrary), Gen, elements, oneof)
+import Test.QuickCheck.Arbitrary (genericShrink, shrink)
 import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
 import qualified UnliftIO.Concurrent as Concurrent
@@ -146,7 +148,16 @@ data Request
   | ListItems
   | GetPasswordRequest LoginItemId
   | UnknownRequest
-  deriving (Eq, Show)
+  deriving (Eq, Generic)
+
+instance Show Request where
+  show (UnlockRequest username _) =
+    "unlock (" <> show username <> ")"
+  show Status = "status"
+  show ListItems = "list-items"
+  show (GetPasswordRequest loginItemId) =
+    "get-password (" <> show loginItemId <> ")"
+  show UnknownRequest = "unknown-request"
 
 instance Arbitrary Request where
   arbitrary =
@@ -157,6 +168,25 @@ instance Arbitrary Request where
         GetPasswordRequest <$> arbitrary,
         pure UnknownRequest
       ]
+  shrink = genericShrink
+
+data Command
+  = UnlockCommand
+  | StatusCommand
+  | ListItemsCommand
+  | GetPasswordCommand
+  deriving (Eq, Enum, Bounded)
+
+instance Arbitrary Command where
+  arbitrary = elements [minBound .. maxBound]
+  shrink _ = []
+
+requestCommand :: Request -> Maybe Command
+requestCommand (UnlockRequest _ _) = Just UnlockCommand
+requestCommand Status = Just StatusCommand
+requestCommand ListItems = Just ListItemsCommand
+requestCommand (GetPasswordRequest _) = Just GetPasswordCommand
+requestCommand UnknownRequest = Nothing
 
 data LatestRefreshStatus
   = LatestRefreshSucceeded
@@ -209,7 +239,7 @@ instance Arbitrary ItemCacheState where
 data AgentState
   = Locked
   | Unlocked SessionKey ItemCacheState
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 instance Arbitrary AgentState where
   arbitrary = do
@@ -217,6 +247,7 @@ instance Arbitrary AgentState where
     case maybeSessionKey of
       Nothing -> pure Locked
       Just sessionKey -> Unlocked sessionKey <$> arbitrary
+  shrink = genericShrink
 
 arbitraryUtcTime :: Gen UTCTime
 arbitraryUtcTime =
@@ -225,37 +256,55 @@ arbitraryUtcTime =
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
     cmd <- obj .: "cmd"
-    case (cmd :: Text) of
-      "unlock" -> UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
-      "status" -> pure Status
-      "list-items" -> pure ListItems
-      "get-password" -> GetPasswordRequest . LoginItemId <$> obj .: "id"
-      _ -> pure UnknownRequest
+    case fromCommandIdentifier (cmd :: Text) of
+      Just UnlockCommand ->
+        UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
+      Just StatusCommand ->
+        pure Status
+      Just ListItemsCommand ->
+        pure ListItems
+      Just GetPasswordCommand ->
+        GetPasswordRequest . LoginItemId <$> obj .: "id"
+      Nothing ->
+        pure UnknownRequest
 
 instance ToJSON Request where
   toJSON (UnlockRequest (Username email) (Password password)) =
     object
-      [ "cmd" .= ("unlock" :: Text),
+      [ "cmd" .= toCommandIdentifier UnlockCommand,
         "email" .= email,
         "password" .= password
       ]
   toJSON Status =
     object
-      [ "cmd" .= ("status" :: Text)
+      [ "cmd" .= toCommandIdentifier StatusCommand
       ]
   toJSON ListItems =
     object
-      [ "cmd" .= ("list-items" :: Text)
+      [ "cmd" .= toCommandIdentifier ListItemsCommand
       ]
   toJSON (GetPasswordRequest (LoginItemId passwordItemId)) =
     object
-      [ "cmd" .= ("get-password" :: Text),
+      [ "cmd" .= toCommandIdentifier GetPasswordCommand,
         "id" .= passwordItemId
       ]
   toJSON UnknownRequest =
     object
       [ "cmd" .= ("unknown" :: Text)
       ]
+
+toCommandIdentifier :: Command -> Text
+toCommandIdentifier UnlockCommand = "unlock"
+toCommandIdentifier StatusCommand = "status"
+toCommandIdentifier ListItemsCommand = "list-items"
+toCommandIdentifier GetPasswordCommand = "get-password"
+
+fromCommandIdentifier :: Text -> Maybe Command
+fromCommandIdentifier "unlock" = Just UnlockCommand
+fromCommandIdentifier "status" = Just StatusCommand
+fromCommandIdentifier "list-items" = Just ListItemsCommand
+fromCommandIdentifier "get-password" = Just GetPasswordCommand
+fromCommandIdentifier _ = Nothing
 
 runAgent :: IO ()
 runAgent = do
