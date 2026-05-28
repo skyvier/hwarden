@@ -225,14 +225,6 @@ instance Arbitrary Command where
   arbitrary = elements [minBound..maxBound]
   shrink _ = []
 
--- TODO: If this is actually needed, write a property test for this
-requestCommand :: Request -> Maybe Command
-requestCommand (UnlockRequest _ _) = Just UnlockCommand
-requestCommand Status = Just StatusCommand
-requestCommand ListItems = Just ListItemsCommand
-requestCommand (GetPasswordRequest _) = Just GetPasswordCommand
-requestCommand UnknownRequest = Nothing
-
 -- TODO: write roundtrip tests for these
 
 toCommandIdentifier :: Command -> Text
