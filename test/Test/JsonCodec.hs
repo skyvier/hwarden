@@ -30,7 +30,10 @@ tests = testGroup "JSON codec"
 
 roundTripTests :: TestTree
 roundTripTests = testGroup "decode . encode <=> id" 
-  [ testProperty "Request" $ \request ->
+  [ testProperty "Command" $ \cmd ->
+      Agent.fromCommandIdentifier (Agent.toCommandIdentifier cmd)
+        === Just (cmd :: Agent.Command)
+  , testProperty "Request" $ \request ->
       Aeson.eitherDecode (Aeson.encode request) === Right (request :: Agent.Request)
   , testProperty "ItemSummary" $ \itemSummary ->
       Aeson.eitherDecode (Aeson.encode itemSummary) === Right (itemSummary :: Agent.ItemSummary)
