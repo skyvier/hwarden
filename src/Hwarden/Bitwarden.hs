@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Hwarden.Bitwarden
@@ -18,6 +19,7 @@ import Data.Aeson (FromJSON (parseJSON), withObject, (.:), (.:?))
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import GHC.Generics (Generic)
 import Hwarden.Types
   ( ItemSummary (ItemSummary),
     LoginItemId,
@@ -26,28 +28,30 @@ import Hwarden.Types
     SessionKey,
     Username
   )
-import Test.QuickCheck (Arbitrary (arbitrary), oneof)
+import Test.QuickCheck (oneof)
+import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
+import Test.QuickCheck.Instances.Text ()
 
 data UnlockError
   = UnlockUnavailable
   | CodeRequired
   | UnlockFailed Text
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 data ListItemsError
   = ListItemsUnavailable
   | ListItemsFailed Text
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 data GetPasswordError
   = GetPasswordUnavailable
   | GetPasswordFailed Text
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 data SyncError
   = SyncUnavailable
   | SyncFailed Text
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
 
 instance Arbitrary UnlockError where
   arbitrary =
@@ -56,6 +60,7 @@ instance Arbitrary UnlockError where
         pure CodeRequired,
         UnlockFailed . T.pack <$> arbitrary
       ]
+  shrink = genericShrink
 
 instance Arbitrary ListItemsError where
   arbitrary =
@@ -63,6 +68,7 @@ instance Arbitrary ListItemsError where
       [ pure ListItemsUnavailable,
         ListItemsFailed . T.pack <$> arbitrary
       ]
+  shrink = genericShrink
 
 instance Arbitrary GetPasswordError where
   arbitrary =
@@ -70,6 +76,7 @@ instance Arbitrary GetPasswordError where
       [ pure GetPasswordUnavailable,
         GetPasswordFailed . T.pack <$> arbitrary
       ]
+  shrink = genericShrink
 
 instance Arbitrary SyncError where
   arbitrary =
@@ -77,6 +84,7 @@ instance Arbitrary SyncError where
       [ pure SyncUnavailable,
         SyncFailed . T.pack <$> arbitrary
       ]
+  shrink = genericShrink
 
 class Monad m => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
