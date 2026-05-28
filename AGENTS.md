@@ -25,9 +25,34 @@
 
 ## Change guidance
 
-- Keep error messages free of leaked passwords.
+- Keep error messages free of leaked passwords or session keys.
 - Maintain strict filesystem permissions for the socket directory.
 - If behavior changes, update `README.md` with the new request or response contract.
+
+## Coding conventions
+
+### Type classes
+
+- No orpahed type class instances without explicit approval from the developer
+- Type class instances must be placed directly under the type definition
+
+#### Arbitrary instances
+
+- If you need an Arbitrary instance for a type
+    - Prefer defining the instance in the same module that defines the original type
+    - If the instance needs to be specialized, use a newtype wrapper and define 
+      the Arbitrary instance for the newtype wrapper
+    - Always implement the shrink function
+        - If it makes sense, rely on genericShrink
+
+
+### Testing
+
+- If you define roundtrip transformations (e.g. ToJSON/FromJSON, Show/Read), 
+  write roundtrip property tests for the relevant types
+- If you define a new ToJSON instance, write golden tests that test the encoding
+- If you define a new FromJSON instance, write decode tests that cover the logic
+  (including edge cases)
 
 ## Test strategy
 
