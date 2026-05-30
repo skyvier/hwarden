@@ -15,6 +15,7 @@ import qualified Hwarden.Bitwarden as Bitwarden
 import Hwarden.Cache
   ( cacheAgeSeconds,
     cacheFillFailureFromListItemsError,
+    refreshCacheEntry,
     initialItemCacheState,
     syncErrorToCacheFillFailure,
     updateItemCacheState
@@ -41,6 +42,18 @@ tests =
             propertyInitialCacheStateDuringUnlockListItemsFailure
         ]
     , testGroup
+        "refreshCacheEntry"
+        [ testProperty
+            "given successful sync and list-items, refreshCacheEntry returns a cache entry refreshed now" $
+            propertyRefreshCacheEntrySuccess
+        , testProperty
+            "given failed sync, refreshCacheEntry returns the mapped sync failure" $
+            propertyRefreshCacheEntrySyncFailure
+        , testProperty
+            "given successful sync but failed list-items, refreshCacheEntry returns the mapped list-items failure" $
+            propertyRefreshCacheEntryListItemsFailure
+        ]
+    , testGroup
         "updateItemCacheState"
         [ testProperty
             "given any previous cache state, a successful refresh replaces it with a ready cache and success status" $
@@ -54,6 +67,18 @@ tests =
         , testProperty
             "given no ready cache, a failed refresh leaves the cache unavailable with the new failure reason" $
             propertyUpdateItemCacheStateFailureWithoutReadyCache
+        ]
+    , testGroup
+        "handleRefreshResult"
+        [ testProperty
+            "given the worker still owns the active session, refresh result updates cache state and keeps the worker running" $
+            propertyHandleRefreshResultOwnedSession
+        , testProperty
+            "given the agent is locked, refresh result is ignored and the worker stops" $
+            propertyHandleRefreshResultLockedState
+        , testProperty
+            "given a different active session, refresh result is ignored and the worker stops" $
+            propertyHandleRefreshResultDifferentSession
         ]
     ]
 
@@ -163,6 +188,61 @@ propertyInitialCacheStateDuringUnlockListItemsFailure
         Agent.Locked ->
           False
 
+propertyRefreshCacheEntrySuccess
+  :: Agent.SessionKey
+  -> [Agent.ItemSummary]
+  -> MockEnv
+  -> Property
+propertyRefreshCacheEntrySuccess sessionKey items mockEnv =
+  let
+    result =
+      runMockBitwarden
+        ( mockEnv
+            & withSyncResult (Right ())
+            & withListItemsResult (Right items)
+        )
+        (refreshCacheEntry sessionKey)
+  in
+    property $
+      result == Right (Agent.CacheEntry items mockNow)
+
+propertyRefreshCacheEntrySyncFailure
+  :: Agent.SessionKey
+  -> Bitwarden.SyncError
+  -> Either Agent.ListItemsError [Agent.ItemSummary]
+  -> MockEnv
+  -> Property
+propertyRefreshCacheEntrySyncFailure sessionKey syncError configuredListItemsResult mockEnv =
+  let
+    result =
+      runMockBitwarden
+        ( mockEnv
+            & withSyncResult (Left syncError)
+            & withListItemsResult configuredListItemsResult
+        )
+        (refreshCacheEntry sessionKey)
+  in
+    property $
+      result == Left (syncErrorToCacheFillFailure sessionKey syncError)
+
+propertyRefreshCacheEntryListItemsFailure
+  :: Agent.SessionKey
+  -> Agent.ListItemsError
+  -> MockEnv
+  -> Property
+propertyRefreshCacheEntryListItemsFailure sessionKey listItemsError mockEnv =
+  let
+    result =
+      runMockBitwarden
+        ( mockEnv
+            & withSyncResult (Right ())
+            & withListItemsResult (Left listItemsError)
+        )
+        (refreshCacheEntry sessionKey)
+  in
+    property $
+      result == Left (cacheFillFailureFromListItemsError sessionKey listItemsError)
+
 propertyUpdateItemCacheStateSuccessReplacesState ::
   Agent.ItemCacheState ->
   Agent.CacheEntry ->
@@ -212,3 +292,41 @@ propertyUpdateItemCacheStateFailureWithoutReadyCache previousFailure newFailure 
     property $
       notYetFilledResult == Agent.CacheFillError newFailure
         && failedCacheFillResult == Agent.CacheFillError newFailure
+
+propertyHandleRefreshResultOwnedSession
+  :: Agent.SessionKey
+  -> Agent.ItemCacheState
+  -> Either Agent.CacheFillFailure Agent.CacheEntry
+  -> Property
+propertyHandleRefreshResultOwnedSession sessionKey itemCacheState refreshResult =
+  property $
+    Agent.handleRefreshResult
+      sessionKey
+      refreshResult
+      (Agent.Unlocked sessionKey itemCacheState)
+      == ( Agent.Unlocked sessionKey (updateItemCacheState itemCacheState refreshResult),
+           True
+         )
+
+propertyHandleRefreshResultLockedState
+  :: Agent.SessionKey
+  -> Either Agent.CacheFillFailure Agent.CacheEntry
+  -> Property
+propertyHandleRefreshResultLockedState sessionKey refreshResult =
+  property $
+    Agent.handleRefreshResult sessionKey refreshResult Agent.Locked
+      == (Agent.Locked, False)
+
+propertyHandleRefreshResultDifferentSession
+  :: Agent.SessionKey
+  -> Agent.SessionKey
+  -> Agent.ItemCacheState
+  -> Either Agent.CacheFillFailure Agent.CacheEntry
+  -> Property
+propertyHandleRefreshResultDifferentSession workerSession currentSession itemCacheState refreshResult =
+  workerSession /= currentSession ==>
+    Agent.handleRefreshResult
+      workerSession
+      refreshResult
+      (Agent.Unlocked currentSession itemCacheState)
+      == (Agent.Unlocked currentSession itemCacheState, False)

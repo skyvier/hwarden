@@ -30,6 +30,7 @@ module Hwarden.Agent
     decide,
     handleGetPassword,
     handleListItems,
+    handleRefreshResult,
     handleUnlock,
     handleRequest,
     handleRequestWith,
