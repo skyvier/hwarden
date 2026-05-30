@@ -9,9 +9,14 @@
 
 module Test.Sanitization (tests) where
 
+<<<<<<< HEAD
 import Control.Monad.Reader (ReaderT, asks, runReaderT)
 import Control.Monad.Writer.Strict (WriterT, runWriterT, tell)
 import Control.Monad.Time (MonadTime (currentTime, monotonicTime))
+=======
+import qualified Data.Aeson as Aeson
+import Data.Aeson ((.=))
+>>>>>>> 643d64c (Cover secret parsing boundaries)
 import qualified Data.Text as T
 import Data.Data
 import Data.Function ((&))
@@ -29,8 +34,15 @@ import GHC.TypeLits
 
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
+<<<<<<< HEAD
 import Hwarden.Logging
 import Control.Monad (forM_)
+=======
+import qualified Hwarden.Cache as Cache
+
+-- TODO: remember to test that all requests received by a locked agent 
+-- are responded to with "locked"
+>>>>>>> 643d64c (Cover secret parsing boundaries)
 
 tests :: TestTree
 tests = testGroup "secret redaction invariants"
@@ -57,9 +69,41 @@ tests = testGroup "secret redaction invariants"
       , testProperty "unknown request logs do not expose the current session key" $
           propertyRequestLogsDoNotExposeSecrets Agent.UnknownRequest
       ]
+  , testProperty "BwItem parsing ignores login.password secrets" $
+      propertyBwItemParsingIgnoresLoginPasswordSecret
+  , testProperty "LatestRefreshStatus built from a hostile backend never exposes secrets" $
+      propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
+  
+  -- XXX: This does not belong to this testGroup
   , testProperty "given a successful get-password response, show never exposes the plaintext password" $
       propertyPasswordResultShowDoesNotExposePassword
   ]
+
+propertyBwItemParsingIgnoresLoginPasswordSecret :: Agent.Password -> Property
+propertyBwItemParsingIgnoresLoginPasswordSecret (Agent.Password passwordNeedle) =
+  let
+    payload =
+      Aeson.object
+        [ "id" .= ("item-123" :: T.Text),
+          "name" .= ("example item" :: T.Text),
+          "login" .=
+            Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text),
+                "password" .= passwordNeedle
+              ]
+        ]
+   in
+    case Aeson.fromJSON payload of
+      Aeson.Success (item :: Bitwarden.BwItem) ->
+        let
+          renderedItem = T.pack (show item)
+          renderedSummaries = T.pack (show (Bitwarden.extractLoginItems [item]))
+        in
+          counterexample (show item) $
+            not (passwordNeedle `T.isInfixOf` renderedItem)
+              .&&. not (passwordNeedle `T.isInfixOf` renderedSummaries)
+      Aeson.Error err ->
+        counterexample err False
 
 propertyPasswordResultShowDoesNotExposePassword :: Agent.LoginItemId -> String -> Property
 propertyPasswordResultShowDoesNotExposePassword loginItemId passwordText =
@@ -163,6 +207,7 @@ propertyHandleRequestWithDoesNotExposeSecrets mockEnv request cacheState =
     property $
       not $ responseLeaksSessionKey currentState response
 
+<<<<<<< HEAD
 propertyUnlockLogsDoNotExposeSecrets
   :: LeakingMockEnv "session-key" "password-value"
   -> AgentStateWithSessionKey "session-key"
@@ -261,6 +306,46 @@ instance MonadTime LoggingMockBitwarden where
     LoggingMockBitwarden (asks mockCurrentTime)
   monotonicTime =
     pure 0
+=======
+propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
+  :: LeakingMockEnv "latest-refresh-status-secret"
+  -> Agent.CacheEntry
+  -> Property
+propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets mockEnv cacheEntry =
+  let
+    secretText = "latest-refresh-status-secret"
+    sessionKey = Agent.SessionKey secretText
+
+    (LeakingMockEnv leakingEnv) = mockEnv
+    hostileSyncEnv =
+      leakingEnv
+        & withSyncResult (Left (Bitwarden.SyncFailed secretText))
+
+    hostileListItemsEnv =
+      leakingEnv
+        & withSyncResult (Right ())
+        & withListItemsResult (Left (Agent.ListItemsFailed secretText))
+
+    latestRefreshStatusFrom env =
+      case Cache.updateItemCacheState
+        (Agent.CacheReady cacheEntry Agent.LatestRefreshSucceeded)
+        (runMockBitwarden env (Cache.refreshCacheEntry sessionKey)) of
+        Agent.CacheReady _ status -> status
+        cacheState ->
+          error
+            ( "expected failed refresh to preserve ready cache, got "
+                <> show cacheState
+            )
+
+    doesNotLeak latestRefreshStatus =
+      let rendered = T.pack (show latestRefreshStatus)
+       in counterexample (show latestRefreshStatus) $
+            not (secretText `T.isInfixOf` rendered)
+  in
+    doesNotLeak (latestRefreshStatusFrom hostileSyncEnv)
+      .&&. doesNotLeak (latestRefreshStatusFrom hostileListItemsEnv)
+
+>>>>>>> 643d64c (Cover secret parsing boundaries)
 
 responseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 responseLeaksSessionKey Agent.Locked _ = False
