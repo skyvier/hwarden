@@ -9,14 +9,11 @@
 
 module Test.Sanitization (tests) where
 
-<<<<<<< HEAD
 import Control.Monad.Reader (ReaderT, asks, runReaderT)
 import Control.Monad.Writer.Strict (WriterT, runWriterT, tell)
 import Control.Monad.Time (MonadTime (currentTime, monotonicTime))
-=======
 import qualified Data.Aeson as Aeson
 import Data.Aeson ((.=))
->>>>>>> 643d64c (Cover secret parsing boundaries)
 import qualified Data.Text as T
 import Data.Data
 import Data.Function ((&))
@@ -34,18 +31,18 @@ import GHC.TypeLits
 
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
-<<<<<<< HEAD
 import Hwarden.Logging
 import Control.Monad (forM_)
-=======
 import qualified Hwarden.Cache as Cache
 
--- TODO: remember to test that all requests received by a locked agent 
--- are responded to with "locked"
->>>>>>> 643d64c (Cover secret parsing boundaries)
-
 tests :: TestTree
-tests = testGroup "secret redaction invariants"
+tests = testGroup "sanitization"
+  [ secretRedactionTests
+  , showTests
+  ]
+
+secretRedactionTests :: TestTree
+secretRedactionTests = testGroup "secret redaction invariants"
   [ testProperty "given any state, the encoded status response never exposes the session key" $
       propertyHandleRequestWithStatusDoesNotExposeSessionKey
   , testProperty "given any state, an unknown command never exposes the session key" $
@@ -71,11 +68,17 @@ tests = testGroup "secret redaction invariants"
       ]
   , testProperty "BwItem parsing ignores login.password secrets" $
       propertyBwItemParsingIgnoresLoginPasswordSecret
+  , testProperty "BwItem parsing ignores hostile unknown secret fields" $
+      propertyBwItemParsingIgnoresHostileUnknownSecretFields
+  , testProperty "CacheFillFailure mappings never expose session secrets" $
+      propertyCacheFillFailureMappingsDoNotExposeSessionSecrets
   , testProperty "LatestRefreshStatus built from a hostile backend never exposes secrets" $
       propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
-  
-  -- XXX: This does not belong to this testGroup
-  , testProperty "given a successful get-password response, show never exposes the plaintext password" $
+  ]
+
+showTests :: TestTree
+showTests = testGroup "show instances"
+  [ testProperty "given a successful get-password response, show never exposes the plaintext password" $
       propertyPasswordResultShowDoesNotExposePassword
   ]
 
@@ -90,6 +93,40 @@ propertyBwItemParsingIgnoresLoginPasswordSecret (Agent.Password passwordNeedle) 
             Aeson.object
               [ "username" .= ("me@example.com" :: T.Text),
                 "password" .= passwordNeedle
+              ]
+        ]
+   in
+    case Aeson.fromJSON payload of
+      Aeson.Success (item :: Bitwarden.BwItem) ->
+        let
+          renderedItem = T.pack (show item)
+          renderedSummaries = T.pack (show (Bitwarden.extractLoginItems [item]))
+        in
+          counterexample (show item) $
+            not (passwordNeedle `T.isInfixOf` renderedItem)
+              .&&. not (passwordNeedle `T.isInfixOf` renderedSummaries)
+      Aeson.Error err ->
+        counterexample err False
+
+propertyBwItemParsingIgnoresHostileUnknownSecretFields :: Agent.Password -> Property
+propertyBwItemParsingIgnoresHostileUnknownSecretFields (Agent.Password passwordNeedle) =
+  let
+    payload =
+      Aeson.object
+        [ "id" .= ("item-123" :: T.Text),
+          "name" .= ("example item" :: T.Text),
+          "notes" .= passwordNeedle,
+          "fields" .=
+            [ Aeson.object
+                [ "name" .= ("hostile-field" :: T.Text),
+                  "value" .= passwordNeedle
+                ]
+            ],
+          "login" .=
+            Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text),
+                "totp" .= passwordNeedle,
+                "passwordRevisionDate" .= passwordNeedle
               ]
         ]
    in
@@ -207,7 +244,6 @@ propertyHandleRequestWithDoesNotExposeSecrets mockEnv request cacheState =
     property $
       not $ responseLeaksSessionKey currentState response
 
-<<<<<<< HEAD
 propertyUnlockLogsDoNotExposeSecrets
   :: LeakingMockEnv "session-key" "password-value"
   -> AgentStateWithSessionKey "session-key"
@@ -306,9 +342,29 @@ instance MonadTime LoggingMockBitwarden where
     LoggingMockBitwarden (asks mockCurrentTime)
   monotonicTime =
     pure 0
-=======
+
+propertyCacheFillFailureMappingsDoNotExposeSessionSecrets :: Agent.SessionKey -> Property
+propertyCacheFillFailureMappingsDoNotExposeSessionSecrets sessionKey@(Agent.SessionKey secretText) =
+  let
+    listItemsFailure =
+      Cache.cacheFillFailureFromListItemsError
+        sessionKey
+        (Agent.ListItemsFailed ("hostile list-items failure " <> secretText))
+
+    syncFailure =
+      Cache.syncErrorToCacheFillFailure
+        sessionKey
+        (Bitwarden.SyncFailed ("hostile sync failure " <> secretText))
+
+    doesNotLeak cacheFillFailure =
+      let rendered = T.pack (show cacheFillFailure)
+       in counterexample (show cacheFillFailure) $
+            not (secretText `T.isInfixOf` rendered)
+  in
+    doesNotLeak listItemsFailure .&&. doesNotLeak syncFailure
+
 propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
-  :: LeakingMockEnv "latest-refresh-status-secret"
+  :: LeakingMockEnv "latest-refresh-status-secret" "latest-refresh-status-secret"
   -> Agent.CacheEntry
   -> Property
 propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets mockEnv cacheEntry =
@@ -344,8 +400,6 @@ propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets mockEnv cacheEntry
   in
     doesNotLeak (latestRefreshStatusFrom hostileSyncEnv)
       .&&. doesNotLeak (latestRefreshStatusFrom hostileListItemsEnv)
-
->>>>>>> 643d64c (Cover secret parsing boundaries)
 
 responseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 responseLeaksSessionKey Agent.Locked _ = False
