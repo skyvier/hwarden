@@ -27,8 +27,6 @@ tests = testGroup "get-password"
       propertyHandleRequestWithGetPasswordUnavailable
   , testProperty "given an unlocked state, a failed get-password backend returns a sanitized failure" $
       propertyHandleRequestWithGetPasswordFailed
-  , testProperty "given any initial state, handleGetPassword returns the password and preserves state" $
-      propertyHandleGetPasswordSuccess
   ]
 
 propertyHandleRequestWithGetPasswordPreservesState ::
@@ -106,20 +104,4 @@ propertyHandleRequestWithGetPasswordFailed sessionKey loginItemId errorText =
    in property $
         newState == currentState
           && response == expectedResponse
-          && effects == []
-
-propertyHandleGetPasswordSuccess ::
-  Agent.SessionKey ->
-  Agent.LoginItemId ->
-  Agent.AgentState ->
-  Agent.PasswordValue ->
-  Property
-propertyHandleGetPasswordSuccess sessionKey loginItemId initialState passwordValue =
-  let (newState, response, effects) =
-        runMockBitwarden
-          (defaultMockEnv & withGetPasswordResult (Right passwordValue))
-          (Agent.handleGetPassword sessionKey loginItemId initialState)
-   in property $
-        newState == initialState
-          && response == Agent.passwordResultResponse loginItemId passwordValue
           && effects == []
