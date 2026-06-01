@@ -27,6 +27,7 @@ import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 import qualified Test.Sanitization as Sanitization
 import qualified Test.Cache as Cache
 import qualified Test.Runtime as Runtime
+import qualified Test.Logging as Logging
 import qualified Test.Agent.Decide as Agent.Decide
 import qualified Test.StateMachine as StateMachine
 import qualified Test.RequestHandler as RequestHandler
@@ -47,6 +48,7 @@ tests =
       Sanitization.tests,
       Cache.tests,
       Runtime.tests,
+      Logging.tests,
       Agent.Decide.tests,
       StateMachine.tests,
       RequestHandler.tests,
