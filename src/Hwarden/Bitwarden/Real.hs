@@ -1,5 +1,8 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Hwarden.Bitwarden.Real
   ( RealBitwardenT (..),
     HasBitwardenCliConfig (..),
@@ -24,7 +27,7 @@ import Hwarden.Bitwarden
     UnlockError (..),
     extractLoginItems
   )
-import Hwarden.Logging (SafeLogger (..))
+import Hwarden.Logging (SafeLogger, logInfoF)
 import Hwarden.Types
   ( LoginItemId (LoginItemId),
     Password (Password),
@@ -59,7 +62,7 @@ instance
   Bitwarden (RealBitwardenT r m)
   where
   unlock (Username email) (Password password) = RealBitwardenT $ do
-    logInfoMessage "running bw login"
+    (logInfoF @"running bw login" @m :: m ())
     let args =
           [ "login",
             "--nointeraction",
@@ -76,7 +79,7 @@ instance
       sanitizeUnlockFailure
 
   listItems (SessionKey rawSessionKey) = RealBitwardenT $ do
-    logInfoMessage "running bw list items"
+    (logInfoF @"running bw list items" @m :: m ())
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["list", "items"]
     handleCheckedByteCommand
       (runProcessBytes command)
@@ -90,7 +93,7 @@ instance
       (ListItemsFailed . T.pack . BS8.unpack)
 
   sync (SessionKey rawSessionKey) = RealBitwardenT $ do
-    logInfoMessage "running bw sync"
+    (logInfoF @"running bw sync" @m :: m ())
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["sync"]
     handleCheckedCommand
       (runCommand command)
@@ -99,7 +102,7 @@ instance
       sanitizeSyncFailure
 
   getPassword (SessionKey rawSessionKey) (LoginItemId itemId) = RealBitwardenT $ do
-    logInfoMessage "running bw get password"
+    (logInfoF @"running bw get password" @m :: m ())
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["get", "password", T.unpack itemId]
     handleCheckedCommand
       (runCommand command)
@@ -108,12 +111,13 @@ instance
       (GetPasswordFailed . T.pack)
 
 configureServer ::
+  forall m r.
   (SafeLogger m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
   m (Either Text ())
 configureServer = do
   bestEffortLogout
   serverUrl <- asks bitwardenServerUrl
-  logInfoMessage "running bw config server"
+  (logInfoF @"running bw config server" @m :: m ())
   command <- isolatedBwProcess ["config", "server", T.unpack serverUrl]
   handleCheckedCommand
     (runCommand command)
@@ -122,10 +126,11 @@ configureServer = do
     sanitizeCommandFailure
 
 bestEffortLogout ::
+  forall m r.
   (SafeLogger m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
   m ()
 bestEffortLogout = do
-  logInfoMessage "running bw logout"
+  (logInfoF @"running bw logout" @m :: m ())
   command <- isolatedBwProcess ["logout"]
   result <-
     handleCheckedCommand
@@ -135,7 +140,7 @@ bestEffortLogout = do
       sanitizeLogoutFailure
   case result of
     Left _ ->
-      logInfoMessage "bw logout failed; continuing startup"
+      (logInfoF @"bw logout failed; continuing startup" @m :: m ())
     Right () ->
       pure ()
 
