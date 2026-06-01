@@ -25,6 +25,7 @@ library
     , bytestring
     , directory
     , filepath
+    , first-class-families
     , katip
     , monad-time
     , network
@@ -57,6 +58,7 @@ test-suite hwarden-agent-test
       Test.Integration
     , Test.MockEnv
     , Test.Sanitization 
+    , Test.Logging
     , Test.Cache
     , Test.StateMachine
     , Test.RequestHandler
@@ -76,6 +78,7 @@ test-suite hwarden-agent-test
     , directory
     , hwarden-agent
     , filepath
+    , first-class-families
     , katip
     , monad-time
     , mtl

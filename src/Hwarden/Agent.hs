@@ -1,6 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Hwarden.Agent
   ( Bitwarden (..),
     AgentState (..),
@@ -86,7 +88,7 @@ import Hwarden.Cache
     refreshCacheEntry,
     updateItemCacheState
   )
-import Hwarden.Logging (SafeLogger (..))
+import Hwarden.Logging (SafeLogger (..), logInfoF)
 import Hwarden.Response
   ( FailureMessage (..),
     Response,
@@ -407,13 +409,13 @@ startRefreshLoop agentStateVar sessionKey = do
   refreshIntervalMicroseconds <-
     (* 1000000) <$> asks envCacheRefreshIntervalSeconds
   katipAddNamespace cacheRefreshNamespace $ do
-    logInfoMessage "starting item cache refresh loop"
+    (logInfoF @"starting item cache refresh loop" @AgentT :: AgentT ())
     void $
       Concurrent.forkIO (refreshLoop refreshIntervalMicroseconds)
   where
     refreshLoop refreshIntervalMicroseconds = do
       Concurrent.threadDelay refreshIntervalMicroseconds
-      logInfoMessage "running item cache refresh"
+      (logInfoF @"running item cache refresh" @AgentT :: AgentT ())
       refreshResult <- refreshCacheEntry sessionKey
       shouldContinue <-
         modifyMVar agentStateVar $
@@ -465,38 +467,38 @@ getPasswordFailureResponse :: SessionKey -> Text -> Response
 getPasswordFailureResponse sessionKey err =
   failureResponse (SessionSanitizedFailure (sanitizeGetPasswordFailure sessionKey err))
 
-logRefreshResult :: SafeLogger m => Either CacheFillFailure CacheEntry -> Bool -> m ()
+logRefreshResult :: forall m. SafeLogger m => Either CacheFillFailure CacheEntry -> Bool -> m ()
 logRefreshResult refreshResult shouldContinue =
   case (refreshResult, shouldContinue) of
     (Right _, True) ->
-      logInfoMessage "item cache refresh succeeded"
+      (logInfoF @"item cache refresh succeeded" @m :: m ())
     (Left CacheFillUnavailable, True) ->
-      logInfoMessage "item cache refresh failed: unavailable"
+      (logInfoF @"item cache refresh failed: unavailable" @m :: m ())
     (Left (CacheFillFailed err), True) ->
-      logSessionSanitizedInfo err
+      (logInfoF @"item cache refresh failed: %s" @m err :: m ())
     (_, False) ->
-      logInfoMessage "stopping item cache refresh loop"
+      (logInfoF @"stopping item cache refresh loop" @m :: m ())
 
 generateTraceId :: IO Text
 generateTraceId = UUID.toText <$> nextRandom
 
-logRequestDecodeFailure :: (KatipContext m, SafeLogger m) => String -> m ()
+logRequestDecodeFailure :: forall m. (KatipContext m, SafeLogger m) => String -> m ()
 logRequestDecodeFailure decodeErr =
   katipAddContext
     (sl "request" ("invalid-json" :: String) <> sl "decode_error" decodeErr)
-    (logInfoMessage "received request")
+    (logInfoF @"received request" @m :: m ())
 
-logRequestReceived :: (KatipContext m, SafeLogger m) => Request -> m ()
+logRequestReceived :: forall m. (KatipContext m, SafeLogger m) => Request -> m ()
 logRequestReceived request =
   katipAddContext
     (sl "request" (show request))
-    (logInfoMessage "received request")
+    (logInfoF @"received request" @m :: m ())
 
-logResponseSent :: (KatipContext m, SafeLogger m) => Response -> m ()
+logResponseSent :: forall m. (KatipContext m, SafeLogger m) => Response -> m ()
 logResponseSent response =
   katipAddContext
     (sl "response" (show response))
-    (logInfoMessage "sent response")
+    (logInfoF @"sent response" @m :: m ())
 
 socketNamespace :: Namespace
 socketNamespace = "socket"
