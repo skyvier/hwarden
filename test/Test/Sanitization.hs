@@ -68,6 +68,14 @@ tests = testGroup "secret redaction invariants"
           assertBool
             "Real Bitwarden instance should not require KatipContext m"
             (not ("KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r" `T.isInfixOf` realSource))
+      , testCase "RealBitwardenT derives SafeLogger instead of Katip capabilities" $ do
+          realSource <- readProjectFile "src/Hwarden/Bitwarden/Real.hs"
+          assertBool
+            "RealBitwardenT should derive SafeLogger"
+            ("SafeLogger" `T.isInfixOf` realBitwardenDerivingLine realSource)
+          assertBool
+            "RealBitwardenT should not derive Katip or KatipContext"
+            (not ("Katip" `T.isInfixOf` realBitwardenDerivingLine realSource))
       , testCase "agent log helpers depend on SafeLogger instead of KatipContext" $ do
           agentSource <- readProjectFile "src/Hwarden/Agent.hs"
           assertBool
@@ -330,6 +338,13 @@ readProjectFile path = do
   if exists
     then T.pack <$> readFile path
     else assertFailure ("missing project file: " <> path)
+
+realBitwardenDerivingLine :: T.Text -> T.Text
+realBitwardenDerivingLine =
+  T.unwords
+    . take 2
+    . dropWhile (not . ("deriving" `T.isInfixOf`))
+    . T.lines
 
 responseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 responseLeaksSessionKey Agent.Locked _ = False
