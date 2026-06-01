@@ -5,7 +5,9 @@
 
 module Hwarden.Logging
   ( LogMessage,
+    SafeLogger (..),
     logSafeInfo,
+    passwordSanitizedLogMessage,
     sessionSanitizedLogMessage,
   )
 where
@@ -13,7 +15,7 @@ where
 import Data.String (IsString)
 import Hwarden.Sanitize
   ( SanitizedText,
-    Secret (SessionSecret, Static),
+    Secret (PasswordSecret, SessionSecret, Static),
     getSanitizedText,
     trustStaticText,
   )
@@ -26,6 +28,15 @@ logSafeInfo :: KatipContext m => LogMessage -> m ()
 logSafeInfo (LogMessage message) =
   $(logTM) InfoS (logStr (getSanitizedText message))
 
+class Monad m => SafeLogger m where
+  logInfoMessage :: LogMessage -> m ()
+  logSessionSanitizedInfo :: SanitizedText SessionSecret -> m ()
+  logPasswordSanitizedInfo :: SanitizedText PasswordSecret -> m ()
+
 sessionSanitizedLogMessage :: SanitizedText SessionSecret -> LogMessage
 sessionSanitizedLogMessage message =
+  LogMessage (trustStaticText (getSanitizedText message))
+
+passwordSanitizedLogMessage :: SanitizedText PasswordSecret -> LogMessage
+passwordSanitizedLogMessage message =
   LogMessage (trustStaticText (getSanitizedText message))

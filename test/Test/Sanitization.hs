@@ -43,6 +43,9 @@ tests = testGroup "secret redaction invariants"
       [ testCase "Hwarden.Logging does not expose a raw Text logger" $ do
           loggingSource <- readProjectFile "src/Hwarden/Logging.hs"
           assertBool
+            "Hwarden.Logging should expose SafeLogger"
+            ("SafeLogger" `T.isInfixOf` loggingSource)
+          assertBool
             "Hwarden.Logging should not export logInfo directly"
             (not ("( logInfo," `T.isInfixOf` loggingSource))
           assertBool
@@ -57,6 +60,19 @@ tests = testGroup "secret redaction invariants"
           assertBool
             "Hwarden.Bitwarden.Real should not import logInfo directly"
             (not ("Hwarden.Logging (logInfo)" `T.isInfixOf` realSource))
+      , testCase "Bitwarden backend logging depends on SafeLogger instead of KatipContext" $ do
+          realSource <- readProjectFile "src/Hwarden/Bitwarden/Real.hs"
+          assertBool
+            "Real Bitwarden instance should require SafeLogger"
+            ("SafeLogger m" `T.isInfixOf` realSource)
+          assertBool
+            "Real Bitwarden instance should not require KatipContext m"
+            (not ("KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r" `T.isInfixOf` realSource))
+      , testCase "agent log helpers depend on SafeLogger instead of KatipContext" $ do
+          agentSource <- readProjectFile "src/Hwarden/Agent.hs"
+          assertBool
+            "logRefreshResult should require SafeLogger"
+            ("logRefreshResult :: SafeLogger m =>" `T.isInfixOf` agentSource)
       ]
   , testProperty "given any state, an unknown command never exposes the session key" $
       propertyHandleRequestWithUnknownDoesNotExposeSessionKey
