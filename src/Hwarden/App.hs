@@ -21,6 +21,12 @@ import Hwarden.Bitwarden.Real
   ( HasBitwardenCliConfig (..),
     RealBitwardenT (..)
   )
+import Hwarden.Logging
+  ( SafeLogger (..),
+    logSafeInfo,
+    passwordSanitizedLogMessage,
+    sessionSanitizedLogMessage
+  )
 import qualified Hwarden.Runtime as Runtime
 import Katip
   ( ColorStrategy (ColorIfTerminal),
@@ -85,6 +91,11 @@ instance KatipContext AgentT where
 instance MonadTime AgentT where
   currentTime = liftIO MonadTime.currentTime
   monotonicTime = liftIO MonadTime.monotonicTime
+
+instance SafeLogger AgentT where
+  logInfoMessage = logSafeInfo
+  logSessionSanitizedInfo = logInfoMessage . sessionSanitizedLogMessage
+  logPasswordSanitizedInfo = logInfoMessage . passwordSanitizedLogMessage
 
 instance HasBitwardenCliConfig Env where
   bitwardenCliPath = envBitwardenCliPath

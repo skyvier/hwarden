@@ -86,7 +86,7 @@ import Hwarden.Cache
     refreshCacheEntry,
     updateItemCacheState
   )
-import Hwarden.Logging (logSafeInfo, sessionSanitizedLogMessage)
+import Hwarden.Logging (SafeLogger (..))
 import Hwarden.Response
   ( FailureMessage (..),
     Response,
@@ -407,13 +407,13 @@ startRefreshLoop agentStateVar sessionKey = do
   refreshIntervalMicroseconds <-
     (* 1000000) <$> asks envCacheRefreshIntervalSeconds
   katipAddNamespace cacheRefreshNamespace $ do
-    logSafeInfo "starting item cache refresh loop"
+    logInfoMessage "starting item cache refresh loop"
     void $
       Concurrent.forkIO (refreshLoop refreshIntervalMicroseconds)
   where
     refreshLoop refreshIntervalMicroseconds = do
       Concurrent.threadDelay refreshIntervalMicroseconds
-      logSafeInfo "running item cache refresh"
+      logInfoMessage "running item cache refresh"
       refreshResult <- refreshCacheEntry sessionKey
       shouldContinue <-
         modifyMVar agentStateVar $
@@ -465,38 +465,38 @@ getPasswordFailureResponse :: SessionKey -> Text -> Response
 getPasswordFailureResponse sessionKey err =
   failureResponse (SessionSanitizedFailure (sanitizeGetPasswordFailure sessionKey err))
 
-logRefreshResult :: KatipContext m => Either CacheFillFailure CacheEntry -> Bool -> m ()
+logRefreshResult :: SafeLogger m => Either CacheFillFailure CacheEntry -> Bool -> m ()
 logRefreshResult refreshResult shouldContinue =
   case (refreshResult, shouldContinue) of
     (Right _, True) ->
-      logSafeInfo "item cache refresh succeeded"
+      logInfoMessage "item cache refresh succeeded"
     (Left CacheFillUnavailable, True) ->
-      logSafeInfo "item cache refresh failed: unavailable"
+      logInfoMessage "item cache refresh failed: unavailable"
     (Left (CacheFillFailed err), True) ->
-      logSafeInfo (sessionSanitizedLogMessage err)
+      logSessionSanitizedInfo err
     (_, False) ->
-      logSafeInfo "stopping item cache refresh loop"
+      logInfoMessage "stopping item cache refresh loop"
 
 generateTraceId :: IO Text
 generateTraceId = UUID.toText <$> nextRandom
 
-logRequestDecodeFailure :: KatipContext m => String -> m ()
+logRequestDecodeFailure :: (KatipContext m, SafeLogger m) => String -> m ()
 logRequestDecodeFailure decodeErr =
   katipAddContext
     (sl "request" ("invalid-json" :: String) <> sl "decode_error" decodeErr)
-    (logSafeInfo "received request")
+    (logInfoMessage "received request")
 
-logRequestReceived :: KatipContext m => Request -> m ()
+logRequestReceived :: (KatipContext m, SafeLogger m) => Request -> m ()
 logRequestReceived request =
   katipAddContext
     (sl "request" (show request))
-    (logSafeInfo "received request")
+    (logInfoMessage "received request")
 
-logResponseSent :: KatipContext m => Response -> m ()
+logResponseSent :: (KatipContext m, SafeLogger m) => Response -> m ()
 logResponseSent response =
   katipAddContext
     (sl "response" (show response))
-    (logSafeInfo "sent response")
+    (logInfoMessage "sent response")
 
 socketNamespace :: Namespace
 socketNamespace = "socket"
