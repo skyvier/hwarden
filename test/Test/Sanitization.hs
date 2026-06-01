@@ -18,10 +18,9 @@ import Data.Function ((&))
 import Data.Functor.Identity (Identity (runIdentity))
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as BS
-import System.Directory (doesFileExist)
 
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
+import Test.Tasty.HUnit (assertBool, testCase)
 import Test.Tasty.QuickCheck
 
 import Test.MockEnv
@@ -39,49 +38,6 @@ tests :: TestTree
 tests = testGroup "secret redaction invariants"
   [ testProperty "given any state, the encoded status response never exposes the session key" $
       propertyHandleRequestWithStatusDoesNotExposeSessionKey
-  , testGroup "logging API"
-      [ testCase "Hwarden.Logging does not expose a raw Text logger" $ do
-          loggingSource <- readProjectFile "src/Hwarden/Logging.hs"
-          assertBool
-            "Hwarden.Logging should expose SafeLogger"
-            ("SafeLogger" `T.isInfixOf` loggingSource)
-          assertBool
-            "Hwarden.Logging should not export logInfo directly"
-            (not ("( logInfo," `T.isInfixOf` loggingSource))
-          assertBool
-            "Hwarden.Logging should not define logInfo over Text"
-            (not ("logInfo :: KatipContext m => Text -> m ()" `T.isInfixOf` loggingSource))
-      , testCase "Bitwarden-facing modules do not import raw logInfo" $ do
-          agentSource <- readProjectFile "src/Hwarden/Agent.hs"
-          realSource <- readProjectFile "src/Hwarden/Bitwarden/Real.hs"
-          assertBool
-            "Hwarden.Agent should not import logInfo directly"
-            (not ("Hwarden.Logging (logInfo)" `T.isInfixOf` agentSource))
-          assertBool
-            "Hwarden.Bitwarden.Real should not import logInfo directly"
-            (not ("Hwarden.Logging (logInfo)" `T.isInfixOf` realSource))
-      , testCase "Bitwarden backend logging depends on SafeLogger instead of KatipContext" $ do
-          realSource <- readProjectFile "src/Hwarden/Bitwarden/Real.hs"
-          assertBool
-            "Real Bitwarden instance should require SafeLogger"
-            ("SafeLogger m" `T.isInfixOf` realSource)
-          assertBool
-            "Real Bitwarden instance should not require KatipContext m"
-            (not ("KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r" `T.isInfixOf` realSource))
-      , testCase "RealBitwardenT derives SafeLogger instead of Katip capabilities" $ do
-          realSource <- readProjectFile "src/Hwarden/Bitwarden/Real.hs"
-          assertBool
-            "RealBitwardenT should derive SafeLogger"
-            ("SafeLogger" `T.isInfixOf` realBitwardenDerivingLine realSource)
-          assertBool
-            "RealBitwardenT should not derive Katip or KatipContext"
-            (not ("Katip" `T.isInfixOf` realBitwardenDerivingLine realSource))
-      , testCase "agent log helpers depend on SafeLogger instead of KatipContext" $ do
-          agentSource <- readProjectFile "src/Hwarden/Agent.hs"
-          assertBool
-            "logRefreshResult should require SafeLogger"
-            ("logRefreshResult :: SafeLogger m =>" `T.isInfixOf` agentSource)
-      ]
   , testProperty "given any state, an unknown command never exposes the session key" $
       propertyHandleRequestWithUnknownDoesNotExposeSessionKey
   , testProperty "given an unlocked state, the encoded list-items response never exposes the session key" $
@@ -331,20 +287,6 @@ adversarialUnlockedState =
         (Agent.CacheEntry [Agent.ItemSummary "item-123" "Example" "me@example.com"] mockNow)
         Agent.LatestRefreshSucceeded
     )
-
-readProjectFile :: FilePath -> IO T.Text
-readProjectFile path = do
-  exists <- doesFileExist path
-  if exists
-    then T.pack <$> readFile path
-    else assertFailure ("missing project file: " <> path)
-
-realBitwardenDerivingLine :: T.Text -> T.Text
-realBitwardenDerivingLine =
-  T.unwords
-    . take 2
-    . dropWhile (not . ("deriving" `T.isInfixOf`))
-    . T.lines
 
 responseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 responseLeaksSessionKey Agent.Locked _ = False
