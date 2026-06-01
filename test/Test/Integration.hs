@@ -653,8 +653,8 @@ withAgent hwardenAgent workDir agentEnv cont =
 withConfiguredAgent :: AgentConfig -> (AgentResource -> IO a) -> IO a
 withConfiguredAgent agentConfig cont =
   withTempDirectory "/tmp" "hwarden-agent-test" $ \tmpDir -> do
-    let paths = Runtime.deriveAgentPaths (tmpDir </> "runtime")
-        fakeBinDir = tmpDir </> "bin"
+    paths <- either fail pure (Runtime.deriveAgentPaths (tmpDir </> "runtime"))
+    let fakeBinDir = tmpDir </> "bin"
         fakeBwPath = fakeBinDir </> "bw"
         serverUrl = determineBitwardenServerUrl (agentServerUrl agentConfig)
     createDirectoryIfMissing True (Runtime.runtimeDir paths)

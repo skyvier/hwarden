@@ -136,6 +136,9 @@ $XDG_RUNTIME_DIR/hwarden/agent.sock
 $XDG_RUNTIME_DIR/hwarden/bitwarden-cli
 ```
 
+If the derived socket path is longer than the UNIX socket pathname limit, the
+daemon exits before creating runtime directories or starting the socket.
+
 Both directories are created if needed and forced to mode `0700`.
 
 The agent keeps its Bitwarden CLI state in its own isolated profile under
