@@ -24,7 +24,7 @@ import Hwarden.Bitwarden
     UnlockError (..),
     extractLoginItems
   )
-import Hwarden.Logging (logInfo)
+import Hwarden.Logging (logSafeInfo)
 import Hwarden.Types
   ( LoginItemId (LoginItemId),
     Password (Password),
@@ -61,7 +61,7 @@ instance
   where
   unlock (Username email) (Password password) = RealBitwardenT $ do
     katipAddContext (sl "email" email) $
-      logInfo "running bw login"
+      logSafeInfo "running bw login"
     let args =
           [ "login",
             "--nointeraction",
@@ -78,7 +78,7 @@ instance
       sanitizeUnlockFailure
 
   listItems (SessionKey rawSessionKey) = RealBitwardenT $ do
-    logInfo "running bw list items"
+    logSafeInfo "running bw list items"
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["list", "items"]
     handleCheckedByteCommand
       (runProcessBytes command)
@@ -92,7 +92,7 @@ instance
       (ListItemsFailed . T.pack . BS8.unpack)
 
   sync (SessionKey rawSessionKey) = RealBitwardenT $ do
-    logInfo "running bw sync"
+    logSafeInfo "running bw sync"
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["sync"]
     handleCheckedCommand
       (runCommand command)
@@ -101,7 +101,7 @@ instance
       sanitizeSyncFailure
 
   getPassword (SessionKey rawSessionKey) (LoginItemId itemId) = RealBitwardenT $ do
-    logInfo "running bw get password"
+    logSafeInfo "running bw get password"
     command <- authenticatedBwProcess (SessionKey rawSessionKey) ["get", "password", T.unpack itemId]
     handleCheckedCommand
       (runCommand command)
@@ -115,7 +115,7 @@ configureServer ::
 configureServer = do
   bestEffortLogout
   serverUrl <- asks bitwardenServerUrl
-  logInfo "running bw config server"
+  logSafeInfo "running bw config server"
   command <- isolatedBwProcess ["config", "server", T.unpack serverUrl]
   handleCheckedCommand
     (runCommand command)
@@ -127,7 +127,7 @@ bestEffortLogout ::
   (KatipContext m, MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
   m ()
 bestEffortLogout = do
-  logInfo "running bw logout"
+  logSafeInfo "running bw logout"
   command <- isolatedBwProcess ["logout"]
   result <-
     handleCheckedCommand
@@ -136,8 +136,8 @@ bestEffortLogout = do
       (const (Right ()))
       sanitizeLogoutFailure
   case result of
-    Left err ->
-      logInfo ("bw logout failed; continuing startup: " <> err)
+    Left _ ->
+      logSafeInfo "bw logout failed; continuing startup"
     Right () ->
       pure ()
 
