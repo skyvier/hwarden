@@ -9,13 +9,18 @@
 
 module Test.Sanitization (tests) where
 
+import Control.Monad.Reader (ReaderT, asks, runReaderT)
+import Control.Monad.Writer.Strict (WriterT, runWriterT, tell)
+import Control.Monad.Time (MonadTime (currentTime, monotonicTime))
 import qualified Data.Text as T
 import Data.Data
 import Data.Function ((&))
+import Data.Functor.Identity (Identity (runIdentity))
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as BS
 
 import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (assertBool, testCase)
 import Test.Tasty.QuickCheck
 
 import Test.MockEnv
@@ -41,6 +46,53 @@ tests = testGroup "secret redaction invariants"
       propertyHandleRequestWithGetPasswordDoesNotExposeSessionKey
   , testProperty "given an unlocked state, bitwarden CLI outputs are always redacted of secrets" $
       propertyHandleRequestWithDoesNotExposeSecrets
+  , testGroup "request-log-sanitization"
+      [ testCase "unlock logs do not expose an adversarial backend secret" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            adversarialEnv
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password adversarialSecret))
+            Agent.Locked
+      , testCase "successful unlock logs do not expose the new session key" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            ( adversarialEnv
+                & withUnlockResult (Right (Agent.SessionKey adversarialSecret))
+                & withSyncResult (Left (Bitwarden.SyncFailed adversarialSecret))
+            )
+            (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "safe-password"))
+            Agent.Locked
+      , testCase "status logs do not expose the current session key" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            adversarialEnv
+            Agent.Status
+            adversarialUnlockedState
+      , testCase "list-items logs do not expose the current session key" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            adversarialEnv
+            Agent.ListItems
+            adversarialUnlockedState
+      , testCase "get-password failure logs do not expose backend failure text" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            adversarialEnv
+            (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
+            adversarialUnlockedState
+      , testCase "get-password success logs do not expose the returned password" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            (adversarialEnv & withGetPasswordResult (Right (Agent.PasswordValue adversarialSecret)))
+            (Agent.GetPasswordRequest (Agent.LoginItemId "item-123"))
+            adversarialUnlockedState
+      , testCase "unknown request logs do not expose the current session key" $
+          assertLogsDoNotExposeSecret
+            adversarialSecret
+            adversarialEnv
+            Agent.UnknownRequest
+            adversarialUnlockedState
+      ]
   -- TODO: check that even if 'bw list items' includes secrets in some of the 
   -- attributes, those are not included in the response
   
@@ -151,6 +203,91 @@ propertyHandleRequestWithDoesNotExposeSecrets mockEnv request cacheState =
     property $
       not $ responseLeaksSessionKey currentState response
 
+assertLogsDoNotExposeSecret :: T.Text -> MockEnv -> Agent.Request -> Agent.AgentState -> IO ()
+assertLogsDoNotExposeSecret secret mockEnv request initialState =
+  assertBool
+    ("logs exposed secret " <> show secret <> " in:\n" <> unlines (T.unpack <$> logs))
+    (not (any (secret `T.isInfixOf`) logs))
+  where
+    (_, logs) =
+      runLoggingMockBitwarden
+        mockEnv
+        (loggedHandleRequestWith request initialState)
+
+loggedHandleRequestWith ::
+  Agent.Request ->
+  Agent.AgentState ->
+  LoggingMockBitwarden (Agent.AgentState, Agent.Response, [Agent.Effect])
+loggedHandleRequestWith request initialState = do
+  recordLog ("received request: " <> T.pack (show request))
+  result@(_, response, effects) <- Agent.handleRequestWith request initialState
+  recordLog ("sent response: " <> T.pack (show response))
+  recordLog ("effects: " <> T.pack (show effects))
+  pure result
+
+newtype LoggingMockBitwarden a = LoggingMockBitwarden
+  { runLoggingMockBitwardenInternal :: ReaderT MockEnv (WriterT [T.Text] Identity) a
+  }
+  deriving newtype (Functor, Applicative, Monad)
+
+runLoggingMockBitwarden :: MockEnv -> LoggingMockBitwarden a -> (a, [T.Text])
+runLoggingMockBitwarden mockEnv action =
+  runIdentity $
+    runWriterT $
+      runReaderT (runLoggingMockBitwardenInternal action) mockEnv
+
+recordLog :: T.Text -> LoggingMockBitwarden ()
+recordLog message =
+  LoggingMockBitwarden (tell [message])
+
+instance Bitwarden.Bitwarden LoggingMockBitwarden where
+  unlock username password = do
+    recordLog ("running bw login: " <> T.pack (show username) <> " " <> T.pack (show password))
+    LoggingMockBitwarden (asks unlockResult)
+  listItems sessionKey = do
+    recordLog ("running bw list items: " <> T.pack (show sessionKey))
+    LoggingMockBitwarden (asks listItemsResult)
+  sync sessionKey = do
+    recordLog ("running bw sync: " <> T.pack (show sessionKey))
+    LoggingMockBitwarden (asks syncResult)
+  getPassword sessionKey loginItemId = do
+    recordLog ("running bw get password: " <> T.pack (show sessionKey) <> " " <> T.pack (show loginItemId))
+    LoggingMockBitwarden (asks getPasswordResult)
+
+instance MonadTime LoggingMockBitwarden where
+  currentTime =
+    LoggingMockBitwarden (asks mockCurrentTime)
+  monotonicTime =
+    pure 0
+
+adversarialSecret :: T.Text
+adversarialSecret = "adversarial-secret"
+
+adversarialEnv :: MockEnv
+adversarialEnv =
+  let
+    LeakingMockEnv mockEnv =
+      LeakingMockEnv
+        defaultMockEnv
+          { unlockResult = Left (Agent.UnlockFailed adversarialSecret),
+            listItemsResult = Left (Agent.ListItemsFailed adversarialSecret),
+            syncResult = Left (Bitwarden.SyncFailed adversarialSecret),
+            getPasswordResult = Left (Bitwarden.GetPasswordFailed adversarialSecret),
+            mockCurrentTime = mockNow
+          } ::
+        LeakingMockEnv "adversarial-secret"
+   in
+    mockEnv
+
+adversarialUnlockedState :: Agent.AgentState
+adversarialUnlockedState =
+  Agent.Unlocked
+    (Agent.SessionKey adversarialSecret)
+    ( Agent.CacheReady
+        (Agent.CacheEntry [Agent.ItemSummary "item-123" "Example" "me@example.com"] mockNow)
+        Agent.LatestRefreshSucceeded
+    )
+
 
 responseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 responseLeaksSessionKey Agent.Locked _ = False
@@ -191,4 +328,3 @@ instance KnownSymbol (secret :: Symbol) => Arbitrary (LeakingMockEnv secret) whe
       ]
     return $ LeakingMockEnv $
       MockEnv {..}
-
