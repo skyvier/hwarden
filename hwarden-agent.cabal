@@ -78,6 +78,7 @@ test-suite hwarden-agent-test
     , filepath
     , katip
     , monad-time
+    , mtl
     , network
     , process
     , QuickCheck
