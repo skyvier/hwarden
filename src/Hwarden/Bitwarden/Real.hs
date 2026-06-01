@@ -32,7 +32,6 @@ import Hwarden.Types
     SessionKey (SessionKey),
     Username (Username)
   )
-import Katip (Katip, KatipContext)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.IO (hClose)
@@ -48,7 +47,7 @@ import System.Process
 newtype RealBitwardenT r m a = RealBitwardenT
   { unrealBitwarden :: m a
   }
-  deriving (Functor, Applicative, Monad, MonadIO, Katip, KatipContext, MonadReader r)
+  deriving (Functor, Applicative, Monad, MonadIO, SafeLogger, MonadReader r)
 
 class HasBitwardenCliConfig r where
   bitwardenCliPath :: r -> FilePath
