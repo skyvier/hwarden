@@ -257,8 +257,8 @@ instance Arbitrary AgentState where
 runAgent :: IO ()
 runAgent = do
   runtimeDir <- requireRuntimeDir
+  paths <- either die pure (Runtime.deriveAgentPaths runtimeDir)
   env <- initAgentEnv runtimeDir
-  let paths = Runtime.deriveAgentPaths runtimeDir
 
   prepareRuntimeDir (Runtime.socketDir paths)
   prepareRuntimeDir (Runtime.bitwardenCliAppDataDir paths)
