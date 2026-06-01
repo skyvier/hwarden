@@ -57,6 +57,7 @@ test-suite hwarden-agent-test
       Test.Integration
     , Test.MockEnv
     , Test.Sanitization 
+    , Test.Runtime
     , Test.Cache
     , Test.StateMachine
     , Test.RequestHandler

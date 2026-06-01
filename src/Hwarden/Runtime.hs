@@ -14,13 +14,21 @@ data AgentPaths = AgentPaths
   }
   deriving (Eq, Show)
 
-deriveAgentPaths :: FilePath -> AgentPaths
+deriveAgentPaths :: FilePath -> Either String AgentPaths
 deriveAgentPaths baseRuntimeDir =
-  AgentPaths
-    { runtimeDir = baseRuntimeDir,
-      socketDir = hwardenRuntimeDir,
-      socketPath = hwardenRuntimeDir </> "agent.sock",
-      bitwardenCliAppDataDir = hwardenRuntimeDir </> "bitwarden-cli"
-    }
+  if length agentSocketPath > maxUnixSocketPathLength
+    then Left "derived UNIX socket path is too long"
+    else
+      Right
+        AgentPaths
+          { runtimeDir = baseRuntimeDir,
+            socketDir = hwardenRuntimeDir,
+            socketPath = agentSocketPath,
+            bitwardenCliAppDataDir = hwardenRuntimeDir </> "bitwarden-cli"
+          }
   where
     hwardenRuntimeDir = baseRuntimeDir </> "hwarden"
+    agentSocketPath = hwardenRuntimeDir </> "agent.sock"
+
+maxUnixSocketPathLength :: Int
+maxUnixSocketPathLength = 107
