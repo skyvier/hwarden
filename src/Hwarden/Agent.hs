@@ -476,7 +476,7 @@ logRefreshResult refreshResult shouldContinue =
     (Left CacheFillUnavailable, True) ->
       (logInfoF @"item cache refresh failed: unavailable" @m :: m ())
     (Left (CacheFillFailed err), True) ->
-      (logInfoF @"item cache refresh failed: %s" @m err :: m ())
+      (logInfoF @"item cache refresh failed: %{SessionSanitized}" @m err :: m ())
     (_, False) ->
       (logInfoF @"stopping item cache refresh loop" @m :: m ())
 

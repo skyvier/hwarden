@@ -9,10 +9,10 @@ import Control.Monad.Writer.Strict (Writer, execWriter, tell)
 import Data.Text (Text)
 import Hwarden.Logging
   ( SafeLogger (..),
-    ToLog (..),
     logInfoF,
     renderLogMessage
   )
+import Hwarden.Sanitize (sanitizeListItemsFailure)
 import qualified Hwarden.Agent as Agent
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
@@ -30,11 +30,6 @@ instance SafeLogger CaptureLog where
   logPasswordSanitizedInfo _ =
     CaptureLog (tell ["password-sanitized"])
 
-newtype PublicText = PublicText Text
-
-instance ToLog PublicText where
-  toLogText (PublicText value) = value
-
 capturedLogs :: CaptureLog () -> [Text]
 capturedLogs =
   execWriter . runCaptureLog
@@ -46,22 +41,26 @@ tests =
     [ testCase "logInfoF logs a static message with no parameters" $
         capturedLogs (logInfoF @"startup complete")
           @?= ["startup complete"]
-    , testCase "logInfoF formats one loggable parameter" $
-        capturedLogs (logInfoF @"result: %s" (PublicText "ok"))
-          @?= ["result: ok"]
-    , testCase "logInfoF formats multiple loggable parameters" $
+    , testCase "logInfoF formats a typed sanitized parameter" $
         capturedLogs
           ( logInfoF
-              @"request %s returned %s"
-              (PublicText "status")
-              (PublicText "unlocked")
+              @"result: %{SessionSanitized}"
+              (sanitizeListItemsFailure (Agent.SessionKey "raw-session-key") "safe error")
           )
-          @?= ["request status returned unlocked"]
+          @?= ["result: safe error"]
+    , testCase "logInfoF formats multiple typed parameters" $
+        capturedLogs
+          ( logInfoF
+              @"session %{SessionKey} produced %{PasswordValue}"
+              (Agent.SessionKey "raw-session-key")
+              (Agent.PasswordValue "raw-password")
+          )
+          @?= ["session [REDACTED] produced [REDACTED]"]
     , testCase "logInfoF treats non-placeholder percent sequences as literals" $
         capturedLogs (logInfoF @"progress: 100%% complete")
           @?= ["progress: 100%% complete"]
     , testCase "logInfoF uses ToLog redaction for secrets" $
         capturedLogs
-          (logInfoF @"session: %s" (Agent.SessionKey "raw-session-key"))
+          (logInfoF @"session: %{SessionKey}" (Agent.SessionKey "raw-session-key"))
           @?= ["session: [REDACTED]"]
     ]
