@@ -19,6 +19,7 @@ import Data.Data
 import Data.Function ((&))
 import Data.Functor.Identity (Identity (runIdentity))
 import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BS
 
 import Test.Tasty (TestTree, testGroup)
@@ -66,8 +67,8 @@ secretRedactionTests = testGroup "secret redaction invariants"
       , testProperty "unknown request logs do not expose the current session key" $
           propertyRequestLogsDoNotExposeSecrets Agent.UnknownRequest
       ]
-  , testProperty "BwItem parsing ignores login.password secrets" $
-      propertyBwItemParsingIgnoresLoginPasswordSecret
+  , testProperty "encoded login item summaries do not expose login.password secrets" $
+      propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret
   , testProperty "BwItem parsing ignores hostile unknown secret fields" $
       propertyBwItemParsingIgnoresHostileUnknownSecretFields
   , testProperty "CacheFillFailure mappings never expose session secrets" $
@@ -80,10 +81,12 @@ showTests :: TestTree
 showTests = testGroup "show instances"
   [ testProperty "given a successful get-password response, show never exposes the plaintext password" $
       propertyPasswordResultShowDoesNotExposePassword
+  , testProperty "BwItem show does not expose login.password secrets" $
+      propertyBwItemShowDoesNotExposeLoginPasswordSecret
   ]
 
-propertyBwItemParsingIgnoresLoginPasswordSecret :: Agent.Password -> Property
-propertyBwItemParsingIgnoresLoginPasswordSecret (Agent.Password passwordNeedle) =
+propertyBwItemShowDoesNotExposeLoginPasswordSecret :: Agent.Password -> Property
+propertyBwItemShowDoesNotExposeLoginPasswordSecret (Agent.Password passwordNeedle) =
   let
     payload =
       Aeson.object
@@ -100,11 +103,34 @@ propertyBwItemParsingIgnoresLoginPasswordSecret (Agent.Password passwordNeedle) 
       Aeson.Success (item :: Bitwarden.BwItem) ->
         let
           renderedItem = T.pack (show item)
-          renderedSummaries = T.pack (show (Bitwarden.extractLoginItems [item]))
         in
           counterexample (show item) $
             not (passwordNeedle `T.isInfixOf` renderedItem)
-              .&&. not (passwordNeedle `T.isInfixOf` renderedSummaries)
+      Aeson.Error err ->
+        counterexample err False
+
+propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret :: Agent.Password -> Property
+propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret (Agent.Password passwordNeedle) =
+  let
+    payload =
+      Aeson.object
+        [ "id" .= ("item-123" :: T.Text),
+          "name" .= ("example item" :: T.Text),
+          "login" .=
+            Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text),
+                "password" .= passwordNeedle
+              ]
+        ]
+   in
+    case Aeson.fromJSON payload of
+      Aeson.Success (item :: Bitwarden.BwItem) ->
+        let
+          encodedSummaries = LBS.toStrict (Aeson.encode (Bitwarden.extractLoginItems [item]))
+          passwordBytes = TE.encodeUtf8 passwordNeedle
+        in
+          counterexample (BS.unpack encodedSummaries) $
+            not (passwordBytes `BS.isInfixOf` encodedSummaries)
       Aeson.Error err ->
         counterexample err False
 
