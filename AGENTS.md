@@ -31,6 +31,30 @@
 
 ## Coding conventions
 
+### Logging
+
+For logging, use Hwarden.Logging and its public interface:
+
+* logInfoS for static strings
+* logInfoF for strings with parameter substitution
+* never use other means to write to stdout/stderr in production code
+* whenever you need to render a new type to logs, define a hand written
+  ToLog instance for it
+    * NEVER DEFINE A TOLOG INSTANCE FOR TEXT, STRING, BYTESTRING ETC
+    * Users should never be able to insert runtime strings to logs without
+      going through an explicit ToLog instance
+* when writing the ToLog instance, take care to not expose secrets
+* whenever you add a new sensitive type to the code, define its ToLog instance 
+  and write a unit test that checks that logging a value of the sensitive type 
+  does not expose the secret (it should be redacted in logs)
+* NEVER LOG PLAIN TEXT SECRETS (SessionKey, PasswordValue, Password, etc)
+
+### Responses
+
+- Failure response texts should always be sanitized to make sure that an error
+  does not accidentally expose a secret
+    - See Hwarden.Sanitize for details
+
 ### Type classes
 
 - No orpahed type class instances without explicit approval from the developer
@@ -44,7 +68,6 @@
       the Arbitrary instance for the newtype wrapper
     - Always implement the shrink function
         - If it makes sense, rely on genericShrink
-
 
 ### Testing
 
