@@ -69,8 +69,8 @@ secretRedactionTests = testGroup "secret redaction invariants"
       ]
   , testProperty "encoded login item summaries do not expose login.password secrets" $
       propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret
-  , testProperty "BwItem parsing ignores hostile unknown secret fields" $
-      propertyBwItemParsingIgnoresHostileUnknownSecretFields
+  , testProperty "encoded login item summaries do not expose hostile unknown secret fields" $
+      propertyEncodedLoginItemSummariesDoNotExposeHostileUnknownSecretFields
   , testProperty "CacheFillFailure mappings never expose session secrets" $
       propertyCacheFillFailureMappingsDoNotExposeSessionSecrets
   , testProperty "LatestRefreshStatus built from a hostile backend never exposes secrets" $
@@ -83,6 +83,8 @@ showTests = testGroup "show instances"
       propertyPasswordResultShowDoesNotExposePassword
   , testProperty "BwItem show does not expose login.password secrets" $
       propertyBwItemShowDoesNotExposeLoginPasswordSecret
+  , testProperty "BwItem show does not expose hostile unknown secret fields" $
+      propertyBwItemShowDoesNotExposeHostileUnknownSecretFields
   ]
 
 propertyBwItemShowDoesNotExposeLoginPasswordSecret :: Agent.Password -> Property
@@ -134,8 +136,8 @@ propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret (Agent.Password 
       Aeson.Error err ->
         counterexample err False
 
-propertyBwItemParsingIgnoresHostileUnknownSecretFields :: Agent.Password -> Property
-propertyBwItemParsingIgnoresHostileUnknownSecretFields (Agent.Password passwordNeedle) =
+propertyBwItemShowDoesNotExposeHostileUnknownSecretFields :: Agent.Password -> Property
+propertyBwItemShowDoesNotExposeHostileUnknownSecretFields (Agent.Password passwordNeedle) =
   let
     payload =
       Aeson.object
@@ -160,11 +162,42 @@ propertyBwItemParsingIgnoresHostileUnknownSecretFields (Agent.Password passwordN
       Aeson.Success (item :: Bitwarden.BwItem) ->
         let
           renderedItem = T.pack (show item)
-          renderedSummaries = T.pack (show (Bitwarden.extractLoginItems [item]))
         in
           counterexample (show item) $
             not (passwordNeedle `T.isInfixOf` renderedItem)
-              .&&. not (passwordNeedle `T.isInfixOf` renderedSummaries)
+      Aeson.Error err ->
+        counterexample err False
+
+propertyEncodedLoginItemSummariesDoNotExposeHostileUnknownSecretFields :: Agent.Password -> Property
+propertyEncodedLoginItemSummariesDoNotExposeHostileUnknownSecretFields (Agent.Password passwordNeedle) =
+  let
+    payload =
+      Aeson.object
+        [ "id" .= ("item-123" :: T.Text),
+          "name" .= ("example item" :: T.Text),
+          "notes" .= passwordNeedle,
+          "fields" .=
+            [ Aeson.object
+                [ "name" .= ("hostile-field" :: T.Text),
+                  "value" .= passwordNeedle
+                ]
+            ],
+          "login" .=
+            Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text),
+                "totp" .= passwordNeedle,
+                "passwordRevisionDate" .= passwordNeedle
+              ]
+        ]
+   in
+    case Aeson.fromJSON payload of
+      Aeson.Success (item :: Bitwarden.BwItem) ->
+        let
+          encodedSummaries = LBS.toStrict (Aeson.encode (Bitwarden.extractLoginItems [item]))
+          passwordBytes = TE.encodeUtf8 passwordNeedle
+        in
+          counterexample (BS.unpack encodedSummaries) $
+            not (passwordBytes `BS.isInfixOf` encodedSummaries)
       Aeson.Error err ->
         counterexample err False
 
