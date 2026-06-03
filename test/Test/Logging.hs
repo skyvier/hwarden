@@ -28,7 +28,7 @@ newtype CaptureLog a = CaptureLog
   deriving (Functor, Applicative, Monad)
 
 instance MonadLog CaptureLog where
-  logInfo message =
+  unsafeLogInfo message =
     CaptureLog (tell [renderLogMessage message])
 
 newtype PublicLogValue = PublicLogValue Text
