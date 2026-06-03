@@ -37,6 +37,8 @@
 -- parses the format string at compile time, checks that each argument's
 -- 'LogTypeName' matches the corresponding slot name, renders each value through
 -- 'toLogText', and then sends the final 'LogMessage' through 'MonadLog'.
+-- Application code should use 'logInfoS' or 'logInfoF'; direct use of
+-- 'unsafeLogInfo' is only for concrete logging backends.
 module Hwarden.Logging
   ( LogMessage,
     MonadLog (..),
@@ -94,8 +96,12 @@ renderLogMessage (LogMessage message) =
   message
 
 -- | A monad that can emit trusted informational log messages.
+--
+-- Define 'unsafeLogInfo' in concrete logging backends. Application code should
+-- call 'logInfoS' or 'logInfoF' instead, so static text and runtime values pass
+-- through the typed logging API before reaching the backend.
 class Monad m => MonadLog m where
-  logInfo :: LogMessage -> m ()
+  unsafeLogInfo :: LogMessage -> m ()
 
 -- | Values that may be safely interpolated into log messages.
 --
@@ -155,7 +161,7 @@ logInfoS ::
   (KnownSymbol message, MonadLog m) =>
   m ()
 logInfoS =
-  logInfo (LogMessage (T.pack (symbolVal (Proxy @message))))
+  unsafeLogInfo (LogMessage (T.pack (symbolVal (Proxy @message))))
 
 -- | Log an informational message described by a type-level format string.
 --
@@ -294,7 +300,7 @@ class BuildLogFunction (slots :: [Symbol]) (format :: Symbol) (m :: Type -> Type
 
 instance BuildLogFunction '[] format m (m ()) where
   buildLogFunction values =
-    logInfo (formatLogMessage @format values)
+    unsafeLogInfo (formatLogMessage @format values)
 
 instance
   ( ToLog argument,
