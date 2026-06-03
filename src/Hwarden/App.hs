@@ -94,7 +94,7 @@ instance MonadTime AgentT where
   monotonicTime = liftIO MonadTime.monotonicTime
 
 instance MonadLog AgentT where
-  logInfo message =
+  unsafeLogInfo message =
     $(logTM) InfoS (logStr (renderLogMessage message))
 
 instance HasBitwardenCliConfig Env where
