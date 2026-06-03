@@ -28,6 +28,47 @@ Inside the shell, running `hwarden-agent` uses that wrapped executable.
 Outside Nix, set `HWARDEN_BW_PATH` yourself before starting the daemon. Having
 some `bw` on `PATH` is not sufficient.
 
+## NixOS module
+
+This repository provides a small NixOS module at `nix/module.nix`. It installs
+`hwarden-agent` as a systemd user service so the daemon keeps using the
+per-user socket path:
+
+```text
+$XDG_RUNTIME_DIR/hwarden/agent.sock
+```
+
+Example host configuration:
+
+```nix
+{
+  imports = [
+    /path/to/hwarden-agent/nix/module.nix
+  ];
+
+  services.hwarden-agent = {
+    enable = true;
+    serverUrl = "https://vault.bitwarden.eu";
+    cacheRefreshIntervalSeconds = 60;
+  };
+}
+```
+
+After switching the host configuration, start the service for a logged-in user:
+
+```sh
+systemctl --user enable --now hwarden-agent.service
+```
+
+The module builds a wrapped agent package by default and passes the selected
+Bitwarden CLI store path through `HWARDEN_BW_PATH`. The main options are:
+
+- `services.hwarden-agent.package`
+- `services.hwarden-agent.bitwardenCliPackage`
+- `services.hwarden-agent.serverUrl`
+- `services.hwarden-agent.cacheRefreshIntervalSeconds`
+- `services.hwarden-agent.extraEnvironment`
+
 ## Run
 
 Environment:

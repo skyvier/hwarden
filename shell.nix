@@ -32,36 +32,11 @@ let
       builtins.substring 0 7 gitRevision;
 
   bitwardenCli = pkgs.bitwarden-cli;
-  packageSrc = pkgs.lib.sourceByRegex ./. [
-    "^app(/.*)?$"
-    "^src(/.*)?$"
-    "^test(/.*)?$"
-    "^hwarden-agent\\.cabal$"
-  ];
-  hwardenAgent =
-    (hpkgs.callCabal2nix "hwarden-agent" packageSrc {}).overrideAttrs (old: {
-      preCheck =
-        (old.preCheck or "")
-        + ''
-          agent_test_exe="$(find "$PWD" -type f -name hwarden-agent -path '*/build/hwarden-agent/hwarden-agent' | head -n 1)"
-          if [ -z "$agent_test_exe" ]; then
-            echo "failed to locate built hwarden-agent executable for tests" 1>&2
-            exit 1
-          fi
-          export HWARDEN_AGENT_TEST_EXE="$agent_test_exe"
-        '';
-    });
-
-  wrappedHwardenAgent = pkgs.symlinkJoin {
-    name = "hwarden-agent-wrapped";
-    paths = [ hwardenAgent ];
-    nativeBuildInputs = [ pkgs.makeWrapper ];
-    postBuild = ''
-      wrapProgram "$out/bin/hwarden-agent" \
-        --set HWARDEN_BW_PATH "${bitwardenCli}/bin/bw" \
-        --set HWARDEN_VERSION "${shortGitRevision}"
-    '';
+  wrappedHwardenAgent = pkgs.callPackage ./nix/package.nix {
+    bitwarden-cli = bitwardenCli;
+    sourceRevision = shortGitRevision;
   };
+  hwardenAgent = wrappedHwardenAgent.unwrapped;
 in
 hpkgs.shellFor {
   packages = p: [ hwardenAgent ];
