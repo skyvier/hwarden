@@ -61,6 +61,8 @@ test-suite hwarden-agent-test
     , Test.Sanitization 
     , Test.Runtime
     , Test.Logging
+    , Test.Sanitization.Json
+    , Test.Sanitization.Show
     , Test.Cache
     , Test.StateMachine
     , Test.RequestHandler
