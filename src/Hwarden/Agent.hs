@@ -89,7 +89,7 @@ import Hwarden.Cache
     refreshCacheEntry,
     updateItemCacheState
   )
-import Hwarden.Logging (MonadLog, logInfoF, logInfoS)
+import Hwarden.Logging (MonadLog, logInfoF, logInfoS, ToLog (..))
 import Hwarden.Response
   ( FailureMessage (..),
     Response,
@@ -164,6 +164,16 @@ instance Show Request where
   show (GetPasswordRequest loginItemId) = 
     "get-password (" <> show loginItemId <> ")"
   show UnknownRequest = "unknown-request"
+
+instance ToLog Request where 
+  toLogText (UnlockRequest username _) =
+    "unlock (" <> toLogText username <> ")"
+  toLogText Status = "status"
+  toLogText ListItems = "list-items"
+  toLogText (GetPasswordRequest loginItemId) = 
+    "get-password (" <> toLogText loginItemId <> ")"
+  toLogText UnknownRequest = "unknown-request"
+
 
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
@@ -348,6 +358,10 @@ handleRequestWith request agentState =
 data Effect
   = StartCacheRefreshLoop SessionKey
   deriving (Eq, Show)
+
+instance ToLog Effect where
+  toLogText (StartCacheRefreshLoop _) = 
+    "start-cache-refresh-loop"
 
 data Decision 
   = Unlock Username Password
