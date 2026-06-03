@@ -44,9 +44,13 @@ import Test.QuickCheck (NonNegative (getNonNegative), oneof)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
 import qualified Data.Text as T
+import Hwarden.Logging
 
 newtype CacheAgeSeconds = CacheAgeSeconds Int
   deriving (Eq, Show)
+
+instance ToLog CacheAgeSeconds where
+  toLogText (CacheAgeSeconds seconds) = T.pack (show seconds)
 
 instance Arbitrary CacheAgeSeconds where
   arbitrary = CacheAgeSeconds . getNonNegative <$> arbitrary
@@ -59,6 +63,14 @@ data FailureMessage
 
 instance IsString FailureMessage where
   fromString = StaticFailure . fromString
+
+instance ToLog FailureMessage where 
+  toLogText (StaticFailure sanitizedText) = 
+    toLogText sanitizedText
+  toLogText (PasswordSanitizedFailure sanitizedText) = 
+    toLogText sanitizedText
+  toLogText (SessionSanitizedFailure sanitizedText) = 
+    toLogText sanitizedText
 
 instance Arbitrary FailureMessage where
   arbitrary = 
@@ -81,6 +93,12 @@ instance Show Response where
   show (ItemList items cacheAgeSecondsValue) = "ItemList " <> show items <> " " <> show cacheAgeSecondsValue
   show (PasswordResult loginItemId password) = "PasswordResult " <> show loginItemId <> " " <> show password
   show (Failure err) = "Failure " <> show err
+
+instance ToLog Response where
+  toLogText (Success message) = "Success " <> message
+  toLogText (ItemList _ cacheAgeSecondsValue) = "[ItemList] aged " <> toLogText cacheAgeSecondsValue
+  toLogText (PasswordResult loginItemId password) = "PasswordResult " <> toLogText loginItemId <> " " <> toLogText password
+  toLogText (Failure err) = "Failure " <> toLogText err
 
 instance ToJSON Response where
   toJSON (Success message) =
