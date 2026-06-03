@@ -1,6 +1,7 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Hwarden.App
   ( AgentT (..),
@@ -22,10 +23,8 @@ import Hwarden.Bitwarden.Real
     RealBitwardenT (..)
   )
 import Hwarden.Logging
-  ( SafeLogger (..),
-    logSafeInfo,
-    passwordSanitizedLogMessage,
-    sessionSanitizedLogMessage
+  ( MonadLog (..),
+    renderLogMessage
   )
 import qualified Hwarden.Runtime as Runtime
 import Katip
@@ -45,6 +44,8 @@ import Katip
     localKatipContext,
     localKatipNamespace,
     localLogEnv,
+    logStr,
+    logTM,
     mkHandleScribe,
     permitItem,
     registerScribe
@@ -92,10 +93,9 @@ instance MonadTime AgentT where
   currentTime = liftIO MonadTime.currentTime
   monotonicTime = liftIO MonadTime.monotonicTime
 
-instance SafeLogger AgentT where
-  logInfoMessage = logSafeInfo
-  logSessionSanitizedInfo = logInfoMessage . sessionSanitizedLogMessage
-  logPasswordSanitizedInfo = logInfoMessage . passwordSanitizedLogMessage
+instance MonadLog AgentT where
+  logInfo message =
+    $(logTM) InfoS (logStr (renderLogMessage message))
 
 instance HasBitwardenCliConfig Env where
   bitwardenCliPath = envBitwardenCliPath

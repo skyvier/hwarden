@@ -6,6 +6,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Hwarden.Sanitize 
   ( SanitizedText
@@ -25,7 +26,7 @@ import GHC.Generics (Generic)
 import Hwarden.Types (Password (..), SessionKey (..))
 import Test.QuickCheck
 import Data.String (IsString (fromString))
-import Test.QuickCheck.Arbitrary (genericShrink)
+import Hwarden.Logging (ToLog (..))
 import Test.QuickCheck.Instances.Text ()
 
 data Secret 
@@ -42,6 +43,21 @@ type role SanitizedText nominal
 
 instance IsString (SanitizedText Static) where
   fromString = SanitizedText . T.pack
+
+instance ToLog (SanitizedText Static) where
+  type LogTypeName (SanitizedText Static) = "StaticSanitized"
+
+  toLogText = getSanitizedText
+
+instance ToLog (SanitizedText PasswordSecret) where
+  type LogTypeName (SanitizedText PasswordSecret) = "PasswordSanitized"
+
+  toLogText = getSanitizedText
+
+instance ToLog (SanitizedText SessionSecret) where
+  type LogTypeName (SanitizedText SessionSecret) = "SessionSanitized"
+
+  toLogText = getSanitizedText
 
 trustStaticText :: Text -> SanitizedText Static
 trustStaticText = SanitizedText

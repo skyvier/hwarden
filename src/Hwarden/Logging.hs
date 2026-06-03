@@ -2,6 +2,7 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -13,42 +14,58 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+-- | Typed logging helpers.
+--
+-- The API intentionally separates static log text from runtime values. Static
+-- text can appear in a type-level string through 'logInfoS' or 'logInfoF', but
+-- runtime values must be supplied through 'ToLog'. This makes accidental
+-- logging of secrets harder: raw runtime 'Text' cannot be interpolated unless
+-- the application explicitly provides a 'ToLog' instance for it.
+--
+-- Static messages use 'logInfoS':
+--
+-- @
+-- logInfoS @"starting bitwarden sync"
+-- @
+--
+-- Messages with runtime values use 'logInfoF':
+--
+-- @
+-- logInfoF @"session %{SessionKey}" sessionKey
+-- @
+--
+-- parses the format string at compile time, checks that each argument's
+-- 'LogTypeName' matches the corresponding slot name, renders each value through
+-- 'toLogText', and then sends the final 'LogMessage' through 'MonadLog'.
 module Hwarden.Logging
   ( LogMessage,
-    SafeLogger (..),
+    MonadLog (..),
     ToLog (..),
+    Field,
+    field,
     logInfoF,
-    logSafeInfo,
-    passwordSanitizedLogMessage,
+    logInfoS,
     renderLogMessage,
-    sessionSanitizedLogMessage,
   )
 where
 
 import Data.Kind (Type)
 import Data.Proxy (Proxy (Proxy))
-import Data.String (IsString)
 import Data.Text (Text)
 import qualified Data.Text as T
-import DeFun.Core (App, type (@@))
+import DeFun.Core (App, type (@@), type (~>))
 import qualified GHC.TypeError as TE
 import GHC.TypeLits
   ( KnownSymbol,
     Symbol,
     symbolVal
   )
-import Hwarden.Sanitize
-  ( SanitizedText,
-    Secret (PasswordSecret, SessionSecret, Static),
-    getSanitizedText,
-    trustStaticText,
+import GHC.Generics
+  ( D,
+    Generic (Rep),
+    M1,
+    Meta (MetaData)
   )
-import Hwarden.Types
-  ( Password,
-    PasswordValue,
-    SessionKey
-  )
-import Katip (KatipContext, Severity (InfoS), logStr, logTM)
 import Symparsec.Parser.Common
   ( PParser,
     PReply,
@@ -59,66 +76,122 @@ import Symparsec.Parser.Common
     type Error1
   )
 import Symparsec.Parser.TakeWhile (TakeWhile)
-import Symparsec.Parser.While.Predicates (IsAlphaSym)
 import Symparsec.Run (Run)
 
-newtype LogMessage = LogMessage (SanitizedText Static)
-  deriving (IsString)
+-- | Trusted log text ready to be sent to a logging backend.
+--
+-- The constructor is intentionally hidden. Use 'logInfoS' for static log
+-- messages and 'logInfoF' for formatted log messages. There is deliberately no
+-- 'Data.String.IsString' instance: even string literals should enter through a
+-- type-level logging function.
+newtype LogMessage = LogMessage Text
 
+-- | Render a trusted log message.
+--
+-- This is mostly useful for tests and concrete logging backends.
 renderLogMessage :: LogMessage -> Text
 renderLogMessage (LogMessage message) =
-  getSanitizedText message
+  message
 
-logSafeInfo :: KatipContext m => LogMessage -> m ()
-logSafeInfo message =
-  $(logTM) InfoS (logStr (renderLogMessage message))
+-- | A monad that can emit trusted informational log messages.
+class Monad m => MonadLog m where
+  logInfo :: LogMessage -> m ()
 
-class Monad m => SafeLogger m where
-  logInfoMessage :: LogMessage -> m ()
-  logSessionSanitizedInfo :: SanitizedText SessionSecret -> m ()
-  logPasswordSanitizedInfo :: SanitizedText PasswordSecret -> m ()
-
+-- | Values that may be safely interpolated into log messages.
+--
+-- The associated 'LogTypeName' is matched against typed slots in 'logInfoF'
+-- format strings. 'LogTypeName' defaults to the type name from 'Generic'
+-- metadata, but 'toLogText' has no default: rendering runtime data must remain
+-- an explicit decision.
 class ToLog a where
+  -- | Type-level slot name accepted by this value.
+  type LogTypeName a :: Symbol
+  type LogTypeName a = DefaultLogTypeName a
+
+  -- | Render a value into log-safe text.
   toLogText :: a -> Text
 
-instance ToLog SessionKey where
-  toLogText _ = "[REDACTED]"
+-- | Default log slot name derived from the type's 'Generic' metadata.
+--
+-- Types can use this default by deriving 'Generic' and omitting an explicit
+-- 'LogTypeName'. Types whose log slot name should differ from their Haskell
+-- type name can override the associated type.
+type DefaultLogTypeName :: Type -> Symbol
+type DefaultLogTypeName value =
+  RepLogTypeName (Rep value)
 
-instance ToLog Password where
-  toLogText _ = "[REDACTED]"
+type RepLogTypeName :: (Type -> Type) -> Symbol
+type family RepLogTypeName rep where
+  RepLogTypeName (M1 D ('MetaData name moduleName packageName isNewtype) fields) =
+    name
 
-instance ToLog PasswordValue where
-  toLogText _ = "[REDACTED]"
+-- | A value with a caller-chosen log slot name.
+--
+-- This lets a call site name a field without defining a new wrapper type. The
+-- wrapped value still needs a 'ToLog' instance, so this does not grant logging
+-- permission to arbitrary runtime values.
+newtype Field (name :: Symbol) a = Field a
 
-instance ToLog (SanitizedText secret) where
-  toLogText = getSanitizedText
+-- | Attach a caller-chosen type-level field name to a loggable value.
+--
+-- @
+-- logInfoF @"value: %{chosen_identifier}" (field @"chosen_identifier" x)
+-- @
+field :: forall name a. a -> Field name a
+field = Field
 
-sessionSanitizedLogMessage :: SanitizedText SessionSecret -> LogMessage
-sessionSanitizedLogMessage message =
-  LogMessage (trustStaticText (getSanitizedText message))
+instance ToLog a => ToLog (Field name a) where
+  type LogTypeName (Field name a) = name
 
-passwordSanitizedLogMessage :: SanitizedText PasswordSecret -> LogMessage
-passwordSanitizedLogMessage message =
-  LogMessage (trustStaticText (getSanitizedText message))
+  toLogText (Field value) = toLogText value
 
+-- | Log an informational static message.
+--
+-- @
+-- logInfoS @"starting bitwarden sync"
+-- @
+logInfoS ::
+  forall message m.
+  (KnownSymbol message, MonadLog m) =>
+  m ()
+logInfoS =
+  logInfo (LogMessage (T.pack (symbolVal (Proxy @message))))
+
+-- | Log an informational message described by a type-level format string.
+--
+-- Use 'logInfoS' when the message has no runtime values.
+--
+-- Runtime values are supplied through typed slots:
+--
+-- @
+-- logInfoF @"cache refresh failed: %{SessionSanitized}" err
+-- @
+--
+-- The number of slots determines the number of arguments, and each argument's
+-- 'LogTypeName' must match the slot name. Empty slots such as @%{}@ are
+-- rejected at compile time.
 logInfoF ::
-  forall format m.
+  forall format m result.
   ( KnownSymbol format,
-    SafeLogger m,
-    BuildLogFunction (ParseLogArguments format) format m
+    MonadLog m,
+    BuildLogFunction (ParseLogArguments format) format m result
   ) =>
-  LogFunction (ParseLogArguments format) format m
+  result
 logInfoF =
   buildLogFunction @(ParseLogArguments format) @format @m []
 
-type ParseLogArguments :: Symbol -> [Type]
+-- | Parse a format string into the slot names it requires.
+type ParseLogArguments :: Symbol -> [Symbol]
 type ParseLogArguments format =
   ParsedLogArguments (Run LogFormatArguments format)
 
+-- | Convert a symparsec result into a plain slot list or a type error.
+--
 -- The type-level pass only extracts typed slots. For example,
--- "session %{SessionKey}" becomes '[SessionKey]. All ordinary text is skipped;
--- runtime rendering below is responsible for preserving the message text.
-type ParsedLogArguments :: Either TE.ErrorMessage ([Type], Symbol) -> [Type]
+-- @"session %{SessionKey}"@ becomes @'["SessionKey"]@. All ordinary text is
+-- skipped; runtime rendering below is responsible for preserving the message
+-- text.
+type ParsedLogArguments :: Either TE.ErrorMessage ([Symbol], Symbol) -> [Symbol]
 type family ParsedLogArguments parseResult where
   ParsedLogArguments (Right '(arguments, "")) =
     arguments
@@ -130,12 +203,16 @@ type family ParsedLogArguments parseResult where
   ParsedLogArguments (Left err) =
     TE.TypeError err
 
-type LogFormatArguments :: PParser [Type]
+-- | A parser that extracts typed slot names from a format string.
+--
+-- symparsec parsers are defunctionalized functions from parser state to reply.
+type LogFormatArguments :: PParser [Symbol]
 data LogFormatArguments s
 type instance App LogFormatArguments s =
   LogFormatArgumentsLoop '[] s (UnconsState s)
 
-type LogFormatArgumentsLoop :: [Type] -> PState -> (Maybe Char, PState) -> PReply [Type]
+-- | Scan the format text, collecting slot names in reverse order.
+type LogFormatArgumentsLoop :: [Symbol] -> PState -> (Maybe Char, PState) -> PReply [Symbol]
 type family LogFormatArgumentsLoop arguments previousState next where
   LogFormatArgumentsLoop arguments previousState '(Nothing, state) =
     'Reply ('OK (Reverse arguments)) previousState
@@ -144,27 +221,48 @@ type family LogFormatArgumentsLoop arguments previousState next where
   LogFormatArgumentsLoop arguments previousState '(Just other, state) =
     LogFormatArgumentsLoop arguments state (UnconsState state)
 
-type LogFormatAfterPercent :: [Type] -> PState -> (Maybe Char, PState) -> PReply [Type]
+-- | Slot names continue until the closing brace.
+--
+-- Empty names are rejected later, after 'TakeWhile' returns the parsed slot
+-- name and the parser checks the closing brace.
+type IsLogSlotNameChar :: Char -> Bool
+type family IsLogSlotNameChar char where
+  IsLogSlotNameChar '}' = False
+  IsLogSlotNameChar _ = True
+
+type IsLogSlotNameCharSym :: Char ~> Bool
+data IsLogSlotNameCharSym char
+type instance App IsLogSlotNameCharSym char = IsLogSlotNameChar char
+
+-- | Interpret the character after a percent sign.
+type LogFormatAfterPercent :: [Symbol] -> PState -> (Maybe Char, PState) -> PReply [Symbol]
 type family LogFormatAfterPercent arguments state next where
   LogFormatAfterPercent arguments state '(Just '{', slotStartState) =
-    LogFormatSlotName arguments (TakeWhile IsAlphaSym @@ slotStartState)
+    LogFormatSlotName arguments (TakeWhile IsLogSlotNameCharSym @@ slotStartState)
   LogFormatAfterPercent arguments state '(Just other, afterOtherState) =
     LogFormatArgumentsLoop arguments afterOtherState (UnconsState afterOtherState)
   LogFormatAfterPercent arguments state '(Nothing, endState) =
     'Reply ('OK (Reverse arguments)) state
 
-type LogFormatSlotName :: [Type] -> PReply Symbol -> PReply [Type]
+-- | Continue after parsing the contents of a @%{...}@ slot.
+type LogFormatSlotName :: [Symbol] -> PReply Symbol -> PReply [Symbol]
 type family LogFormatSlotName arguments slotResult where
   LogFormatSlotName arguments ('Reply ('OK slotName) slotEndState) =
     LogFormatSlotClose arguments slotName slotEndState (UnconsState slotEndState)
   LogFormatSlotName arguments ('Reply ('Err err) state) =
     'Reply ('Err err) state
 
-type LogFormatSlotClose :: [Type] -> Symbol -> PState -> (Maybe Char, PState) -> PReply [Type]
+-- | Require a closing brace after a slot name.
+--
+-- A closing brace immediately after the opening brace is an empty slot and
+-- produces a type-level parse error.
+type LogFormatSlotClose :: [Symbol] -> Symbol -> PState -> (Maybe Char, PState) -> PReply [Symbol]
 type family LogFormatSlotClose arguments slotName state next where
+  LogFormatSlotClose arguments "" state '(Just '}', afterCloseState) =
+    'Reply ('Err (Error1 "empty log format slot")) state
   LogFormatSlotClose arguments slotName state '(Just '}', afterCloseState) =
     LogFormatArgumentsLoop
-      (LogType slotName ': arguments)
+      (slotName ': arguments)
       afterCloseState
       (UnconsState afterCloseState)
   LogFormatSlotClose arguments slotName state '(Just other, afterOtherState) =
@@ -172,55 +270,46 @@ type family LogFormatSlotClose arguments slotName state next where
   LogFormatSlotClose arguments slotName state '(Nothing, endState) =
     'Reply ('Err (Error1 "unterminated log format slot")) state
 
-type family LogType (name :: Symbol) :: Type where
-  LogType "SessionKey" = SessionKey
-  LogType "Password" = Password
-  LogType "PasswordValue" = PasswordValue
-  LogType "SessionSanitized" = SanitizedText SessionSecret
-  LogType "PasswordSanitized" = SanitizedText PasswordSecret
-  LogType name =
-    TE.TypeError
-      ( TE.Text "Unsupported log slot type: "
-          TE.:<>: TE.ShowType name
-      )
-
-type Reverse :: [Type] -> [Type]
+-- | Restore left-to-right slot order after reverse accumulation.
+type Reverse :: [Symbol] -> [Symbol]
 type Reverse values =
   ReverseOnto values '[]
 
-type ReverseOnto :: [Type] -> [Type] -> [Type]
+type ReverseOnto :: [Symbol] -> [Symbol] -> [Symbol]
 type family ReverseOnto values accumulator where
   ReverseOnto '[] accumulator = accumulator
   ReverseOnto (value ': values) accumulator =
     ReverseOnto values (value ': accumulator)
 
-class BuildLogFunction (arguments :: [Type]) (format :: Symbol) (m :: Type -> Type) where
-  type LogFunction arguments format m :: Type
-
+-- | Build the curried 'logInfoF' result type from the parsed slot list.
+--
+-- The slot list determines arity. The actual argument types are inferred from
+-- the values passed by the caller, then checked with
+-- @LogTypeName argument ~ slotName@.
+class BuildLogFunction (slots :: [Symbol]) (format :: Symbol) (m :: Type -> Type) result | result -> m where
   buildLogFunction ::
-    (KnownSymbol format, SafeLogger m) =>
+    (KnownSymbol format, MonadLog m) =>
     [Text] ->
-    LogFunction arguments format m
+    result
 
-instance BuildLogFunction '[] format m where
-  type LogFunction '[] format m = m ()
-
+instance BuildLogFunction '[] format m (m ()) where
   buildLogFunction values =
-    logInfoMessage (formatLogMessage @format values)
+    logInfo (formatLogMessage @format values)
 
 instance
-  (ToLog argument, BuildLogFunction arguments format m) =>
-  BuildLogFunction (argument ': arguments) format m
+  ( ToLog argument,
+    LogTypeName argument ~ slotName,
+    BuildLogFunction slotNames format m result
+  ) =>
+  BuildLogFunction (slotName ': slotNames) format m (argument -> result)
   where
-  type LogFunction (argument ': arguments) format m =
-    argument -> LogFunction arguments format m
-
   buildLogFunction values value =
-    buildLogFunction @arguments @format @m (values <> [toLogText value])
+    buildLogFunction @slotNames @format @m (values <> [toLogText value])
 
+-- | Render a format string and already-safe slot values into a 'LogMessage'.
 formatLogMessage :: forall format. KnownSymbol format => [Text] -> LogMessage
 formatLogMessage values =
-  LogMessage (trustStaticText (renderFormat (T.pack (symbolVal (Proxy @format))) values))
+  LogMessage (renderFormat (T.pack (symbolVal (Proxy @format))) values)
 
 -- The runtime pass substitutes typed slots in order. The type-level pass has
 -- already fixed the arity and argument types, so this code only needs to walk
