@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications #-}
@@ -7,9 +8,13 @@ module Test.Logging (tests) where
 
 import Control.Monad.Writer.Strict (Writer, execWriter, tell)
 import Data.Text (Text)
+import GHC.Generics (Generic)
 import Hwarden.Logging
-  ( SafeLogger (..),
+  ( MonadLog (..),
+    ToLog (..),
+    field,
     logInfoF,
+    logInfoS,
     renderLogMessage
   )
 import Hwarden.Sanitize (sanitizeListItemsFailure)
@@ -22,13 +27,15 @@ newtype CaptureLog a = CaptureLog
   }
   deriving (Functor, Applicative, Monad)
 
-instance SafeLogger CaptureLog where
-  logInfoMessage message =
+instance MonadLog CaptureLog where
+  logInfo message =
     CaptureLog (tell [renderLogMessage message])
-  logSessionSanitizedInfo _ =
-    CaptureLog (tell ["session-sanitized"])
-  logPasswordSanitizedInfo _ =
-    CaptureLog (tell ["password-sanitized"])
+
+newtype PublicLogValue = PublicLogValue Text
+  deriving (Generic)
+
+instance ToLog PublicLogValue where
+  toLogText (PublicLogValue value) = value
 
 capturedLogs :: CaptureLog () -> [Text]
 capturedLogs =
@@ -38,8 +45,8 @@ tests :: TestTree
 tests =
   testGroup
     "typed logging"
-    [ testCase "logInfoF logs a static message with no parameters" $
-        capturedLogs (logInfoF @"startup complete")
+    [ testCase "logInfoS logs a static message" $
+        capturedLogs (logInfoS @"startup complete")
           @?= ["startup complete"]
     , testCase "logInfoF formats a typed sanitized parameter" $
         capturedLogs
@@ -48,6 +55,17 @@ tests =
               (sanitizeListItemsFailure (Agent.SessionKey "raw-session-key") "safe error")
           )
           @?= ["result: safe error"]
+    , testCase "logInfoF accepts slot names from ToLog instances" $
+        capturedLogs
+          (logInfoF @"result: %{PublicLogValue}" (PublicLogValue "ok"))
+          @?= ["result: ok"]
+    , testCase "logInfoF accepts caller-chosen field names" $
+        capturedLogs
+          ( logInfoF
+              @"this is a value: %{chosen_identifier}"
+              (field @"chosen_identifier" (PublicLogValue "ok"))
+          )
+          @?= ["this is a value: ok"]
     , testCase "logInfoF formats multiple typed parameters" $
         capturedLogs
           ( logInfoF
@@ -56,8 +74,8 @@ tests =
               (Agent.PasswordValue "raw-password")
           )
           @?= ["session [REDACTED] produced [REDACTED]"]
-    , testCase "logInfoF treats non-placeholder percent sequences as literals" $
-        capturedLogs (logInfoF @"progress: 100%% complete")
+    , testCase "logInfoS treats percent sequences as static text" $
+        capturedLogs (logInfoS @"progress: 100%% complete")
           @?= ["progress: 100%% complete"]
     , testCase "logInfoF uses ToLog redaction for secrets" $
         capturedLogs

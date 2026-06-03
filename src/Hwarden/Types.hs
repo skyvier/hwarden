@@ -1,5 +1,7 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Hwarden.Types
   ( LoginItemId (..),
@@ -15,16 +17,20 @@ import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), object, withObject, (.
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
+import Hwarden.Logging (ToLog (..))
 import Test.QuickCheck (elements, listOf1)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
 
-newtype LoginItemId = LoginItemId Text
+newtype LoginItemId = LoginItemId { unLoginItemId :: Text }
   deriving (Eq, Show, Generic)
 
 instance Arbitrary LoginItemId where
   arbitrary = LoginItemId . T.pack <$> arbitrary
   shrink = genericShrink
+
+instance ToLog LoginItemId where
+  toLogText = unLoginItemId
 
 data ItemSummary = ItemSummary
   { itemId :: Text,
@@ -50,10 +56,13 @@ instance Arbitrary ItemSummary where
   shrink = genericShrink
 
 newtype SessionKey = SessionKey Text
-  deriving (Eq)
+  deriving (Eq, Generic)
 
 instance Show SessionKey where
   show _ = "[REDACTED]"
+
+instance ToLog SessionKey where
+  toLogText _ = "[REDACTED]"
 
 instance Arbitrary SessionKey where
   -- Keep generated session keys visually distinctive so secrecy tests can
@@ -66,18 +75,24 @@ instance Arbitrary SessionKey where
     SessionKey . wrapNeedle
       <$> shrinkNeedlePayload sessionNeedlePrefix sessionNeedleSuffix value
 
-newtype Username = Username Text
+newtype Username = Username { unUsername :: Text }
   deriving (Eq, Show, Generic)
 
 instance Arbitrary Username where
   arbitrary = Username . T.pack <$> arbitrary
   shrink = genericShrink
 
+instance ToLog Username where
+  toLogText (Username email) = email
+
 newtype Password = Password Text
   deriving (Eq, Generic)
 
 instance Show Password where
   show _ = "[REDACTED]"
+
+instance ToLog Password where
+  toLogText _ = "[REDACTED]"
 
 instance Arbitrary Password where
   arbitrary =
@@ -92,6 +107,9 @@ newtype PasswordValue = PasswordValue Text
 
 instance Show PasswordValue where
   show _ = "[REDACTED]"
+
+instance ToLog PasswordValue where
+  toLogText _ = "[REDACTED]"
 
 instance Arbitrary PasswordValue where
   arbitrary = PasswordValue . T.pack <$> arbitrary
