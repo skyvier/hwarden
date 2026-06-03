@@ -1,11 +1,6 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
 
 module Test.Sanitization.Json (tests) where
 
@@ -13,15 +8,14 @@ import qualified Data.Aeson as Aeson
 import Data.Aeson ((.=))
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.Proxy (Proxy (..))
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import GHC.TypeLits
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
 import qualified Hwarden.Sanitize as Sanitize
 import Test.Helpers
 import Test.MockEnv
+import Test.Sanitization.LeakingMockEnv
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.QuickCheck
 
@@ -126,7 +120,7 @@ propertyEncodedLoginItemSummariesDoNotExposeHostileUnknownSecretFields (Agent.Pa
         counterexample err False
 
 propertyHandleRequestWithDoesNotExposeSecrets ::
-  LeakingMockEnv "session-key" ->
+  LeakingMockEnv "session-key" "password-value" ->
   Agent.Request ->
   Agent.ItemCacheState ->
   Property
@@ -158,37 +152,3 @@ encodedResponseDoesNotExpose secretText response =
   let rendered = encodedResponse response
    in counterexample (BS.unpack rendered) $
         not (TE.encodeUtf8 secretText `BS.isInfixOf` rendered)
-
-newtype LeakingMockEnv (secret :: Symbol) = LeakingMockEnv MockEnv
-  deriving newtype (Show)
-
-instance KnownSymbol (secret :: Symbol) => Arbitrary (LeakingMockEnv secret) where
-  arbitrary = do
-    let
-      secretText = T.pack $ symbolVal (Proxy @secret)
-      mockCurrentTime = mockNow
-
-    unlockResult <-
-      elements
-        [ Left Agent.UnlockUnavailable,
-          Left (Agent.UnlockFailed secretText),
-          Right (Agent.SessionKey secretText)
-        ]
-    listItemsResult <-
-      elements
-        [ Left Agent.ListItemsUnavailable,
-          Left (Agent.ListItemsFailed secretText),
-          Right []
-        ]
-    syncResult <-
-      elements
-        [ Left Bitwarden.SyncUnavailable,
-          Left (Bitwarden.SyncFailed secretText)
-        ]
-    getPasswordResult <-
-      elements
-        [ Left Bitwarden.GetPasswordUnavailable,
-          Left (Bitwarden.GetPasswordFailed secretText),
-          Right (Agent.PasswordValue "password")
-        ]
-    return $ LeakingMockEnv $ MockEnv {..}
