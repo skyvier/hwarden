@@ -347,7 +347,7 @@ handleRequest agentStateVar request = do
 handleRequestWith :: (Bitwarden m, MonadTime m) => Request -> AgentState -> m (AgentState, Response, [Effect])
 handleRequestWith request agentState =
   case decide request agentState of
-    Unlock username password ->
+    UnlockAction username password ->
       handleUnlock username password
     ListItemsAction cacheEntry ->
       handleListItems cacheEntry agentState
@@ -364,7 +364,7 @@ instance ToLog Effect where
     "start-cache-refresh-loop"
 
 data Decision 
-  = Unlock Username Password
+  = UnlockAction Username Password
   | ListItemsAction CacheEntry
   | GetPasswordAction SessionKey LoginItemId
   | Reply Response
@@ -374,7 +374,7 @@ decide :: Request -> AgentState -> Decision
 decide (UnlockRequest username password) agentState =
   case agentState of
     Unlocked _ _ -> Reply (successResponse "already unlocked")
-    Locked -> Unlock username password
+    Locked -> UnlockAction username password
 decide Status agentState =
   case agentState of
     Locked -> Reply (successResponse "locked")

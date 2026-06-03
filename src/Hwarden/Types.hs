@@ -112,8 +112,12 @@ instance ToLog PasswordValue where
   toLogText _ = "[REDACTED]"
 
 instance Arbitrary PasswordValue where
-  arbitrary = PasswordValue . T.pack <$> arbitrary
-  shrink = genericShrink
+  arbitrary =
+    PasswordValue . wrapPasswordNeedle . T.pack
+      <$> listOf1 (elements passwordAlphabet)
+  shrink (PasswordValue value) =
+    PasswordValue . wrapPasswordNeedle
+      <$> shrinkNeedlePayload passwordNeedlePrefix passwordNeedleSuffix value
 
 wrapNeedle :: Text -> Text
 wrapNeedle value = sessionNeedlePrefix <> value <> sessionNeedleSuffix

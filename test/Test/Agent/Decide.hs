@@ -16,7 +16,7 @@ tests =
         Agent.decide
           (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "secret"))
           Agent.Locked
-          @?= Agent.Unlock (Agent.Username "me@example.com") (Agent.Password "secret")
+          @?= Agent.UnlockAction (Agent.Username "me@example.com") (Agent.Password "secret")
     , testCase "given a locked state, a status request replies locked" $
         Agent.decide Agent.Status Agent.Locked
           @?= Agent.Reply (Agent.successResponse "locked")
