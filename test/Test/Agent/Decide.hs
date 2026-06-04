@@ -2,11 +2,10 @@
 
 module Test.Agent.Decide (tests) where
 
+import qualified Hwarden.Agent as Agent
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
-
-import qualified Hwarden.Agent as Agent
 
 tests :: TestTree
 tests =
@@ -66,7 +65,7 @@ propertyDecideListItemsUnlocked sessionKey cacheEntry latestRefreshStatus =
     Agent.decide
       Agent.ListItems
       (Agent.Unlocked sessionKey (Agent.CacheReady cacheEntry latestRefreshStatus))
-      == Agent.ListItemsAction cacheEntry
+      == Agent.ListItemsAction cacheEntry latestRefreshStatus
 
 propertyDecideListItemsFailedCacheFill :: Agent.SessionKey -> Agent.CacheFillFailure -> Property
 propertyDecideListItemsFailedCacheFill sessionKey cacheFillFailure =

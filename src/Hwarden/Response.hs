@@ -4,6 +4,7 @@
 
 module Hwarden.Response (
   CacheAgeSeconds (..),
+  CacheRefreshStatus (..),
   FailureMessage (..),
   Response,
   failureResponse,
@@ -23,6 +24,7 @@ import Data.Aeson (
   ToJSON (toJSON),
   object,
   withObject,
+  withText,
   (.:),
   (.=),
  )
@@ -55,6 +57,31 @@ instance ToLog CacheAgeSeconds where
 instance Arbitrary CacheAgeSeconds where
   arbitrary = CacheAgeSeconds . getNonNegative <$> arbitrary
 
+data CacheRefreshStatus
+  = CacheRefreshSucceeded
+  | CacheRefreshFailed
+  deriving (Eq, Show, Generic)
+
+instance ToJSON CacheRefreshStatus where
+  toJSON CacheRefreshSucceeded = "succeeded"
+  toJSON CacheRefreshFailed = "failed"
+
+instance FromJSON CacheRefreshStatus where
+  parseJSON =
+    withText "CacheRefreshStatus" $ \value ->
+      case value of
+        "succeeded" -> pure CacheRefreshSucceeded
+        "failed" -> pure CacheRefreshFailed
+        _ -> fail "unknown cache refresh status"
+
+instance Arbitrary CacheRefreshStatus where
+  arbitrary =
+    oneof
+      [ pure CacheRefreshSucceeded
+      , pure CacheRefreshFailed
+      ]
+  shrink = genericShrink
+
 data FailureMessage
   = StaticFailure (SanitizedText Static)
   | PasswordSanitizedFailure (SanitizedText PasswordSecret)
@@ -83,20 +110,21 @@ instance Arbitrary FailureMessage where
 
 data Response
   = Success Text
-  | ItemList [ItemSummary] CacheAgeSeconds
+  | ItemList [ItemSummary] CacheAgeSeconds CacheRefreshStatus
   | PasswordResult LoginItemId PasswordValue
   | Failure FailureMessage
   deriving (Eq, Generic)
 
 instance Show Response where
   show (Success message) = "Success " <> show message
-  show (ItemList items cacheAgeSecondsValue) = "ItemList " <> show items <> " " <> show cacheAgeSecondsValue
+  show (ItemList items cacheAgeSecondsValue cacheRefreshStatus) =
+    "ItemList " <> show items <> " " <> show cacheAgeSecondsValue <> " " <> show cacheRefreshStatus
   show (PasswordResult loginItemId password) = "PasswordResult " <> show loginItemId <> " " <> show password
   show (Failure err) = "Failure " <> show err
 
 instance ToLog Response where
   toLogText (Success message) = "Success " <> message
-  toLogText (ItemList _ cacheAgeSecondsValue) = "[ItemList] aged " <> toLogText cacheAgeSecondsValue
+  toLogText (ItemList _ cacheAgeSecondsValue _) = "[ItemList] aged " <> toLogText cacheAgeSecondsValue
   toLogText (PasswordResult loginItemId password) = "PasswordResult " <> toLogText loginItemId <> " " <> toLogText password
   toLogText (Failure err) = "Failure " <> toLogText err
 
@@ -106,11 +134,12 @@ instance ToJSON Response where
       [ "ok" .= True
       , "message" .= message
       ]
-  toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue)) =
+  toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue) cacheRefreshStatus) =
     object
       [ "ok" .= True
       , "items" .= items
       , "cache_age_seconds" .= cacheAgeSecondsValue
+      , "cache_refresh_status" .= cacheRefreshStatus
       ]
   toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
     object
@@ -130,7 +159,7 @@ instance FromJSON Response where
     if ok
       then
         (PasswordResult . LoginItemId <$> obj .: "id" <*> (PasswordValue <$> obj .: "password"))
-          <|> (ItemList <$> obj .: "items" <*> (CacheAgeSeconds <$> obj .: "cache_age_seconds"))
+          <|> (ItemList <$> obj .: "items" <*> (CacheAgeSeconds <$> obj .: "cache_age_seconds") <*> obj .: "cache_refresh_status")
           <|> (Success <$> obj .: "message")
       else Failure . StaticFailure . trustStaticText <$> obj .: "error"
 
@@ -138,7 +167,7 @@ instance Arbitrary Response where
   arbitrary =
     oneof
       [ successResponse . T.pack <$> arbitrary
-      , itemListResponse <$> arbitrary <*> arbitrary
+      , itemListResponse <$> arbitrary <*> arbitrary <*> arbitrary
       , passwordResultResponse <$> arbitrary <*> arbitrary
       , failureResponse <$> arbitrary
       ]
@@ -147,7 +176,7 @@ instance Arbitrary Response where
 successResponse :: Text -> Response
 successResponse = Success
 
-itemListResponse :: [ItemSummary] -> CacheAgeSeconds -> Response
+itemListResponse :: [ItemSummary] -> CacheAgeSeconds -> CacheRefreshStatus -> Response
 itemListResponse = ItemList
 
 passwordResultResponse :: LoginItemId -> PasswordValue -> Response
@@ -160,8 +189,8 @@ responseErrorText :: Response -> Maybe Text
 responseErrorText (Failure failureMessage) = Just (renderFailureMessage failureMessage)
 responseErrorText _ = Nothing
 
-responseItems :: Response -> Maybe ([ItemSummary], CacheAgeSeconds)
-responseItems (ItemList items cacheAgeSecondsValue) = Just (items, cacheAgeSecondsValue)
+responseItems :: Response -> Maybe ([ItemSummary], CacheAgeSeconds, CacheRefreshStatus)
+responseItems (ItemList items cacheAgeSecondsValue cacheRefreshStatus) = Just (items, cacheAgeSecondsValue, cacheRefreshStatus)
 responseItems _ = Nothing
 
 responsePasswordResult :: Response -> Maybe (LoginItemId, PasswordValue)

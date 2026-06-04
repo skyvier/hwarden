@@ -174,7 +174,7 @@ request.
 | --- | --- | --- | --- |
 | `unlock` | `cmd`, `email`, `password` | `{"ok":true,"message":"unlocked"}` or `{"ok":true,"message":"already unlocked"}` | `{"ok":false,"error":"..."}` |
 | `status` | `cmd` | `{"ok":true,"message":"locked"}` or `{"ok":true,"message":"unlocked"}` | n/a |
-| `list-items` | `cmd` | `{"ok":true,"items":[...],"cache_age_seconds":0}` | `{"ok":false,"error":"locked"}` or `{"ok":false,"error":"item cache unavailable"}` |
+| `list-items` | `cmd` | `{"ok":true,"items":[...],"cache_age_seconds":0,"cache_refresh_status":"succeeded"}` | `{"ok":false,"error":"locked"}` or `{"ok":false,"error":"item cache unavailable"}` |
 | `get-password` | `cmd`, `id` | `{"ok":true,"id":"...","password":"..."}` | `{"ok":false,"error":"locked"}` or `{"ok":false,"error":"..."}` |
 
 Bad JSON returns `{"ok":false,"error":"..."}`. Unknown commands return
@@ -211,6 +211,7 @@ The rofi frontend:
 
 - checks whether the agent is already unlocked
 - prompts for Bitwarden email and password when needed
+- shows the item cache age and latest refresh result in the picker prompt
 - lets you choose a login item from rofi
 - copies the selected password to the X11 clipboard
 
@@ -319,14 +320,16 @@ Expected success:
   "items": [
     { "id": "1", "name": "Battle.net", "username": "joonas_laukka@hotmail.com" }
   ],
-  "cache_age_seconds": 0
+  "cache_age_seconds": 0,
+  "cache_refresh_status": "succeeded"
 }
 ```
 
 The agent warms this cache during a successful `unlock` request and refreshes
 it in memory once a minute for the active unlocked session. If a background
 refresh fails after at least one successful refresh, the agent keeps serving
-the last cached item list and `cache_age_seconds` increases to show staleness.
+the last cached item list, `cache_age_seconds` increases to show staleness, and
+`cache_refresh_status` reports `failed`.
 
 If the agent is still locked:
 

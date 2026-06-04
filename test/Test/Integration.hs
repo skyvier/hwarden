@@ -310,7 +310,7 @@ tests =
             assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             assertEqual
               "expected listed login items"
-              (Agent.itemListResponse listItemsSummary (Agent.CacheAgeSeconds 0))
+              (Agent.itemListResponse listItemsSummary (Agent.CacheAgeSeconds 0) Agent.CacheRefreshSucceeded)
               itemsResponse
     , testCase "sending unlock then waiting for the background refresh returns refreshed login item summaries" $
         let
@@ -406,14 +406,15 @@ tests =
             itemsResponse <- sendRequest (socketPath agent) Agent.ListItems
             assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
             case Agent.responseItems itemsResponse of
-              Just (actualItems, Agent.CacheAgeSeconds ageSeconds) -> do
+              Just (actualItems, Agent.CacheAgeSeconds ageSeconds, cacheRefreshStatus) -> do
                 assertEqual "expected stale cached items after refresh failure" listItemsSummary actualItems
                 assertBool "expected stale cache age after refresh failure" (ageSeconds >= 1)
                 assertBool "expected recent stale cache age after refresh failure" (ageSeconds <= 5)
+                assertEqual "expected failed cache refresh status" Agent.CacheRefreshFailed cacheRefreshStatus
               Nothing ->
                 assertEqual
                   "expected stale cached items after refresh failure"
-                  (Agent.itemListResponse listItemsSummary (Agent.CacheAgeSeconds 0))
+                  (Agent.itemListResponse listItemsSummary (Agent.CacheAgeSeconds 0) Agent.CacheRefreshFailed)
                   itemsResponse
     , testCase "bw sync is called during cache refresh" $
         let
@@ -1040,12 +1041,12 @@ refreshedListItemsSummary =
 assertItemListMatches :: String -> [Agent.ItemSummary] -> Agent.Response -> IO ()
 assertItemListMatches message expectedItems response =
   case Agent.responseItems response of
-    Just (actualItems, _) ->
+    Just (actualItems, _, _) ->
       assertEqual message expectedItems actualItems
     -- Keep the expected ItemList shape in the failure output when the
     -- response constructor is wrong.
     Nothing ->
-      assertEqual message (Agent.itemListResponse expectedItems (Agent.CacheAgeSeconds 0)) response
+      assertEqual message (Agent.itemListResponse expectedItems (Agent.CacheAgeSeconds 0) Agent.CacheRefreshSucceeded) response
 
 waitForMatchingResponse :: FilePath -> Agent.Request -> (Agent.Response -> Bool) -> IO Agent.Response
 waitForMatchingResponse agentSocketPath request matchesResponse =
@@ -1077,7 +1078,7 @@ waitForFileContent path expectedContent =
 matchesExpectedItems :: [Agent.ItemSummary] -> Agent.Response -> Bool
 matchesExpectedItems expectedItems response =
   case Agent.responseItems response of
-    Just (actualItems, _) -> actualItems == expectedItems
+    Just (actualItems, _, _) -> actualItems == expectedItems
     Nothing -> False
 
 requireAgentExecutable :: IO FilePath

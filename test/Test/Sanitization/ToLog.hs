@@ -16,6 +16,7 @@ import Hwarden.Logging (
  )
 import Hwarden.Response (
   CacheAgeSeconds (..),
+  CacheRefreshStatus (..),
   FailureMessage (..),
   failureResponse,
   itemListResponse,
@@ -106,6 +107,7 @@ tests =
                   itemListResponse
                     [ItemSummary "item-secret" "name-secret" "username-secret"]
                     (CacheAgeSeconds 7)
+                    CacheRefreshFailed
              in do
                   toLogText response @?= "[ItemList] aged 7"
                   assertTextDoesNotExpose

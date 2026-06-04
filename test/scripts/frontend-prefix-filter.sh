@@ -18,7 +18,7 @@ cat > "$TMP_DIR/response.txt" <<'JSON'
   {"id":"2","name":"Personal Bank","username":"me@example.com"},
   {"id":"missing-name","username":"missing@example.com"},
   {"id":"3","name":"demo Admin","username":"root@example.com"}
-]}
+],"cache_age_seconds":125,"cache_refresh_status":"failed"}
 JSON
 
 cat > "$TMP_DIR/nc" <<EOF2
@@ -56,6 +56,7 @@ cat > "$TMP_DIR/rofi" <<'EOF2'
 #!/usr/bin/env bash
 set -euo pipefail
 
+printf '%s\n' "$*" >> "$TMP_DIR/rofi-events.log"
 for arg in "$@"; do
   if [ "$arg" = "-dmenu" ]; then
     cat > "$TMP_DIR/picker-labels.txt"
@@ -63,8 +64,6 @@ for arg in "$@"; do
     exit 0
   fi
 done
-
-printf '%s\n' "$*" >> "$TMP_DIR/rofi-events.log"
 EOF2
 chmod +x "$TMP_DIR/rofi"
 
@@ -106,6 +105,7 @@ run_rofi_picker "$TMP_DIR/prefix.stderr" --prefix demo
 expected_filtered_labels=$'Demo Mail [demo@example.com]\ndemo Admin [root@example.com]'
 expected_unfiltered_labels=$'Demo Mail [demo@example.com]\nnull [null@example.com]\nPersonal Bank [me@example.com]\nnull [missing@example.com]\ndemo Admin [root@example.com]'
 actual_labels=$(cat "$TMP_DIR/picker-labels.txt")
+grep -F -- "-dmenu -format i -p Bitwarden - cache 2m old, last refresh failed" "$TMP_DIR/rofi-events.log" >/dev/null
 
 [ "$actual_labels" = "$expected_filtered_labels" ] || {
   printf '%s\n' 'expected prefix filtering to restrict picker labels' >&2

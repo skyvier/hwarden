@@ -90,7 +90,7 @@ propertyHandleRequestWithListItemsPreservesState sessionKey cacheEntry latestRef
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
-          && response == Agent.itemListResponse items (cacheAgeSeconds mockNow cacheEntry)
+          && response == Agent.itemListResponse items (cacheAgeSeconds mockNow cacheEntry) (Agent.cacheRefreshStatusFromLatest latestRefreshStatus)
           && effects == []
 
 propertyHandleRequestWithListItemsReportsExactCacheAge ::
@@ -110,7 +110,7 @@ propertyHandleRequestWithListItemsReportsExactCacheAge sessionKey items latestRe
           (defaultMockEnv & withListItemsResult (Left (Agent.ListItemsFailed "list-items should not hit the backend")))
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
-        response == Agent.itemListResponse items cacheAgeSecondsValue
+        response == Agent.itemListResponse items cacheAgeSecondsValue (Agent.cacheRefreshStatusFromLatest latestRefreshStatus)
           && null effects
 
 propertyHandleRequestWithListItemsServesStaleCache ::
@@ -130,7 +130,7 @@ propertyHandleRequestWithListItemsServesStaleCache sessionKey cacheEntry cacheFi
           (Agent.handleRequestWith Agent.ListItems currentState)
    in property $
         newState == currentState
-          && response == Agent.itemListResponse items (cacheAgeSeconds mockNow cacheEntry)
+          && response == Agent.itemListResponse items (cacheAgeSeconds mockNow cacheEntry) Agent.CacheRefreshFailed
           && effects == []
 
 testHandleRequestWithListItemsEmptyCache :: Assertion
@@ -146,7 +146,7 @@ testHandleRequestWithListItemsEmptyCache =
           (Agent.handleRequestWith Agent.ListItems currentState)
    in do
         newState @?= currentState
-        response @?= Agent.itemListResponse [] (Agent.CacheAgeSeconds 0)
+        response @?= Agent.itemListResponse [] (Agent.CacheAgeSeconds 0) Agent.CacheRefreshSucceeded
         effects @?= []
 
 propertyHandleRequestWithListItemsDoesNotCallBackend ::
