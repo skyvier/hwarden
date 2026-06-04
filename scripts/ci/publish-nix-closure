@@ -17,7 +17,8 @@ package_path=$(
     --argstr sourceRevision "$SHORT_REVISION" \
     -E '{ sourceRevision }:
         let
-          pkgs = import ./nix/pinned-pkgs.nix;
+          lockedNixpkgs = import ./nix/nixpkgs-from-flake-lock.nix {};
+          pkgs = lockedNixpkgs.pkgs;
         in
           pkgs.callPackage ./nix/package.nix { inherit sourceRevision; }'
 )
