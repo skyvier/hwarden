@@ -31,6 +31,7 @@ hpkgs.shellFor {
     pkgs.haskellPackages.hlint
     pkgs.haskellPackages.ormolu
     pkgs.zstd
+    pkgs.git
     bitwardenCli
   ];
   shellHook = ''
