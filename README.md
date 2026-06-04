@@ -60,11 +60,12 @@ After switching the host configuration, start the service for a logged-in user:
 systemctl --user enable --now hwarden-agent.service
 ```
 
-The module builds a wrapped agent package by default and passes the selected
-Bitwarden CLI store path through `HWARDEN_BW_PATH`. The main options are:
+The module builds a wrapped agent package by default. That package fixes the
+Bitwarden CLI store path used by `hwarden-agent`; override
+`services.hwarden-agent.package` with a differently built package if you need a
+different CLI version. The main options are:
 
 - `services.hwarden-agent.package`
-- `services.hwarden-agent.bitwardenCliPackage`
 - `services.hwarden-agent.serverUrl`
 - `services.hwarden-agent.cacheRefreshIntervalSeconds`
 - `services.hwarden-agent.extraEnvironment`

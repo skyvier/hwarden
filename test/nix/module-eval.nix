@@ -25,7 +25,8 @@ let
   service = evaluated.config.systemd.user.services.hwarden-agent;
   env = service.Service.Environment;
 in
-assert lib.elem "HWARDEN_BW_PATH=${pkgs.bitwarden-cli}/bin/bw" env;
+assert !(lib.hasAttrByPath [ "services" "hwarden-agent" "bitwardenCliPackage" ] evaluated.options);
+assert !(lib.any (lib.hasPrefix "HWARDEN_BW_PATH=") env);
 assert lib.elem "HWARDEN_SERVER_URL=https://vault.bitwarden.com" env;
 assert lib.elem "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS=30" env;
 assert service.Install.WantedBy == [ "default.target" ];

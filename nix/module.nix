@@ -7,14 +7,13 @@
 
 let
   cfg = config.services.hwarden-agent;
+  sourceRevision = import ./source-revision.nix { inherit lib; };
 
   defaultPackage = pkgs.callPackage ./package.nix {
-    bitwarden-cli = cfg.bitwardenCliPackage;
-    sourceRevision = "nixos-module";
+    inherit sourceRevision;
   };
 
   environment = {
-    HWARDEN_BW_PATH = "${cfg.bitwardenCliPackage}/bin/bw";
     HWARDEN_SERVER_URL = cfg.serverUrl;
     HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS =
       toString cfg.cacheRefreshIntervalSeconds;
@@ -27,20 +26,14 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = defaultPackage;
-      defaultText = lib.literalExpression "pkgs.callPackage ./nix/package.nix {}";
+      defaultText = lib.literalExpression ''
+        pkgs.callPackage ./nix/package.nix {
+          sourceRevision = import ./nix/source-revision.nix { inherit lib; };
+        }
+      '';
       description = ''
         hwarden-agent package to run. The default package builds this
-        repository and wraps the executable with the selected Bitwarden CLI.
-      '';
-    };
-
-    bitwardenCliPackage = lib.mkOption {
-      type = lib.types.package;
-      default = pkgs.bitwarden-cli;
-      defaultText = lib.literalExpression "pkgs.bitwarden-cli";
-      description = ''
-        Bitwarden CLI package used by the service. Its bw executable path is
-        passed to hwarden-agent through HWARDEN_BW_PATH.
+        repository and wraps the executable with the package's Bitwarden CLI.
       '';
     };
 
@@ -67,7 +60,7 @@ in
       default = {};
       description = ''
         Extra environment variables for the hwarden-agent user service.
-        Do not use this for HWARDEN_BW_PATH, HWARDEN_SERVER_URL, or
+        Do not use this for HWARDEN_SERVER_URL or
         HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS; use the dedicated options
         instead.
       '';

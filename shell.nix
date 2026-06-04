@@ -6,35 +6,15 @@ let
 
   pkgs = import nixpkgs {};
   hpkgs = pkgs.haskellPackages;
-  stripTrailingNewline = pkgs.lib.removeSuffix "\n";
-  gitHead =
-    if builtins.pathExists (./.git + "/HEAD") then
-      stripTrailingNewline (builtins.readFile (./.git + "/HEAD"))
-    else
-      null;
-  gitRevision =
-    if gitHead == null then
-      "unknown"
-    else if pkgs.lib.hasPrefix "ref: " gitHead then
-      let
-        gitRefPath = ./.git + "/${pkgs.lib.removePrefix "ref: " gitHead}";
-      in
-      if builtins.pathExists gitRefPath then
-        stripTrailingNewline (builtins.readFile gitRefPath)
-      else
-        "unknown"
-    else
-      gitHead;
-  shortGitRevision =
-    if gitRevision == "unknown" then
-      gitRevision
-    else
-      builtins.substring 0 7 gitRevision;
+  sourceRevision = import ./nix/source-revision.nix {
+    lib = pkgs.lib;
+    root = ./.;
+  };
 
   bitwardenCli = pkgs.bitwarden-cli;
   wrappedHwardenAgent = pkgs.callPackage ./nix/package.nix {
     bitwarden-cli = bitwardenCli;
-    sourceRevision = shortGitRevision;
+    sourceRevision = sourceRevision;
   };
   hwardenAgent = wrappedHwardenAgent.unwrapped;
 in
