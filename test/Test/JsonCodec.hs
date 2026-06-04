@@ -152,7 +152,7 @@ decodeTests =
             let payload = "{\"ok\":true,\"message\":\"unlocked\"}"
             Aeson.eitherDecodeStrict' payload
               @?= Right (Agent.successResponse "unlocked")
-        , testCase "response parser decodes item-list payload" $ do
+        , testCase "response parser decodes item-list payload with successful cache refresh" $ do
             let payload =
                   "{\"ok\":true,\"items\":[{\"id\":\"1\",\"name\":\"Battle.net\",\"username\":\"skyvier\"}],\"cache_age_seconds\":5,\"cache_refresh_status\":\"succeeded\"}"
             Aeson.eitherDecodeStrict' payload
@@ -161,6 +161,16 @@ decodeTests =
                     [Agent.ItemSummary "1" "Battle.net" "skyvier"]
                     (Agent.CacheAgeSeconds 5)
                     Agent.CacheRefreshSucceeded
+                )
+        , testCase "response parser decodes item-list payload with failed cache refresh" $ do
+            let payload =
+                  "{\"ok\":true,\"items\":[{\"id\":\"1\",\"name\":\"Battle.net\",\"username\":\"skyvier\"}],\"cache_age_seconds\":5,\"cache_refresh_status\":\"failed\"}"
+            Aeson.eitherDecodeStrict' payload
+              @?= Right
+                ( Agent.itemListResponse
+                    [Agent.ItemSummary "1" "Battle.net" "skyvier"]
+                    (Agent.CacheAgeSeconds 5)
+                    Agent.CacheRefreshFailed
                 )
         , testCase "response parser decodes password-result payload" $ do
             let payload = "{\"ok\":true,\"id\":\"item-123\",\"password\":\"super-secret\"}"
@@ -268,6 +278,16 @@ encodeTests =
               ]
               (Agent.CacheAgeSeconds 0)
               Agent.CacheRefreshSucceeded
+          )
+    , testCase "item-list response with failed cache refresh encoding matches golden file" $
+        assertGoldenEncoding
+          "test/golden/item-list-failed-refresh.json"
+          ( Agent.itemListResponse
+              [ Agent.ItemSummary "1" "Battle.net" "joonas_laukka@hotmail.com"
+              , Agent.ItemSummary "2" "GitHub" "skyvier"
+              ]
+              (Agent.CacheAgeSeconds 0)
+              Agent.CacheRefreshFailed
           )
     , testCase "password response encoding matches golden file" $
         assertGoldenEncoding
