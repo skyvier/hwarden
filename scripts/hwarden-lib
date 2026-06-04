@@ -106,6 +106,49 @@ hwarden_items_json() {
   printf '%s' "$response_json" | jq -c '.items'
 }
 
+hwarden_cache_age_label() {
+  local cache_age_seconds=$1
+
+  if [ "$cache_age_seconds" -lt 60 ]; then
+    printf '%ss' "$cache_age_seconds"
+  elif [ "$cache_age_seconds" -lt 3600 ]; then
+    printf '%sm' "$((cache_age_seconds / 60))"
+  else
+    printf '%sh' "$((cache_age_seconds / 3600))"
+  fi
+}
+
+hwarden_cache_refresh_status_label() {
+  local cache_refresh_status=$1
+
+  case "$cache_refresh_status" in
+    succeeded)
+      printf 'refresh ok'
+      ;;
+    failed)
+      printf 'last refresh failed'
+      ;;
+    *)
+      printf 'refresh status unknown'
+      ;;
+  esac
+}
+
+hwarden_rofi_item_prompt() {
+  local response_json=$1
+  local cache_age_seconds
+  local cache_refresh_status
+  local cache_age_label
+  local cache_refresh_status_label
+
+  cache_age_seconds=$(printf '%s' "$response_json" | jq -r '.cache_age_seconds')
+  cache_refresh_status=$(printf '%s' "$response_json" | jq -r '.cache_refresh_status')
+  cache_age_label=$(hwarden_cache_age_label "$cache_age_seconds")
+  cache_refresh_status_label=$(hwarden_cache_refresh_status_label "$cache_refresh_status")
+
+  printf 'Bitwarden - cache %s old, %s' "$cache_age_label" "$cache_refresh_status_label"
+}
+
 hwarden_filter_items_by_prefix() {
   local items_json=$1
   local prefix=$2

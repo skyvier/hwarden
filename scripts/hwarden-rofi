@@ -26,7 +26,13 @@ hwarden_require_x11_clipboard
 
 "$SCRIPT_DIR/hwarden-ensure-unlocked"
 
-items_json=$("$SCRIPT_DIR/hwarden-list-items")
+response_json=$(hwarden_send_request "$(hwarden_list_items_request)")
+if ! hwarden_response_ok "$response_json"; then
+  hwarden_fail "$(hwarden_response_error "$response_json")"
+fi
+
+rofi_prompt=$(hwarden_rofi_item_prompt "$response_json")
+items_json=$(hwarden_items_json "$response_json")
 if [ -n "$prefix_filter" ]; then
   items_json=$(hwarden_filter_items_by_prefix "$items_json" "$prefix_filter")
 fi
@@ -48,7 +54,7 @@ labels=$(
 
 selected_index=$(
   printf '%s\n' "$labels" |
-    rofi -dmenu -format i -p "Bitwarden"
+    rofi -dmenu -format i -p "$rofi_prompt"
 ) || exit 1
 
 [ -n "$selected_index" ] || exit 1

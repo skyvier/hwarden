@@ -54,7 +54,7 @@ arbitraryResponse :: Gen Agent.Response
 arbitraryResponse =
   oneof
     [ Agent.successResponse . T.pack <$> arbitrary
-    , Agent.itemListResponse <$> arbitrary <*> arbitrary
+    , Agent.itemListResponse <$> arbitrary <*> arbitrary <*> arbitrary
     , Agent.passwordResultResponse <$> arbitrary <*> arbitrary
     , Agent.failureResponse <$> arbitraryFailureMessage
     ]
@@ -154,12 +154,13 @@ decodeTests =
               @?= Right (Agent.successResponse "unlocked")
         , testCase "response parser decodes item-list payload" $ do
             let payload =
-                  "{\"ok\":true,\"items\":[{\"id\":\"1\",\"name\":\"Battle.net\",\"username\":\"skyvier\"}],\"cache_age_seconds\":5}"
+                  "{\"ok\":true,\"items\":[{\"id\":\"1\",\"name\":\"Battle.net\",\"username\":\"skyvier\"}],\"cache_age_seconds\":5,\"cache_refresh_status\":\"succeeded\"}"
             Aeson.eitherDecodeStrict' payload
               @?= Right
                 ( Agent.itemListResponse
                     [Agent.ItemSummary "1" "Battle.net" "skyvier"]
                     (Agent.CacheAgeSeconds 5)
+                    Agent.CacheRefreshSucceeded
                 )
         , testCase "response parser decodes password-result payload" $ do
             let payload = "{\"ok\":true,\"id\":\"item-123\",\"password\":\"super-secret\"}"
@@ -266,6 +267,7 @@ encodeTests =
               , Agent.ItemSummary "2" "GitHub" "skyvier"
               ]
               (Agent.CacheAgeSeconds 0)
+              Agent.CacheRefreshSucceeded
           )
     , testCase "password response encoding matches golden file" $
         assertGoldenEncoding

@@ -9,6 +9,7 @@ module Hwarden.Agent (
   AgentState (..),
   FailureMessage (..),
   CacheAgeSeconds (..),
+  CacheRefreshStatus (..),
   CacheFillFailure (..),
   CacheEntry (..),
   ItemCacheState (..),
@@ -29,6 +30,7 @@ module Hwarden.Agent (
   SessionKey (..),
   UnlockError (..),
   Username (..),
+  cacheRefreshStatusFromLatest,
   cleanupSocket,
   decide,
   handleGetPassword,
@@ -96,6 +98,7 @@ import Hwarden.Cache (
  )
 import Hwarden.Logging (MonadLog, ToLog (..), logInfoF, logInfoS)
 import Hwarden.Response (
+  CacheRefreshStatus (..),
   FailureMessage (..),
   Response,
   failureResponse,
@@ -357,8 +360,8 @@ handleRequestWith request agentState =
   case decide request agentState of
     UnlockAction username password ->
       handleUnlock username password
-    ListItemsAction cacheEntry ->
-      handleListItems cacheEntry agentState
+    ListItemsAction cacheEntry latestRefreshStatus ->
+      handleListItems cacheEntry latestRefreshStatus agentState
     GetPasswordAction sessionKey loginItemId ->
       handleGetPassword sessionKey loginItemId agentState
     Reply response -> pure (agentState, response, [])
@@ -373,7 +376,7 @@ instance ToLog Effect where
 
 data Decision
   = UnlockAction Username Password
-  | ListItemsAction CacheEntry
+  | ListItemsAction CacheEntry LatestRefreshStatus
   | GetPasswordAction SessionKey LoginItemId
   | Reply Response
   deriving (Eq, Show)
@@ -390,7 +393,7 @@ decide Status agentState =
 decide ListItems agentState =
   case agentState of
     Locked -> Reply (failureResponse "locked")
-    Unlocked _ (CacheReady cacheEntry _) -> ListItemsAction cacheEntry
+    Unlocked _ (CacheReady cacheEntry latestRefreshStatus) -> ListItemsAction cacheEntry latestRefreshStatus
     Unlocked _ _ -> Reply (failureResponse "item cache unavailable")
 decide (GetPasswordRequest loginItemId) agentState =
   case agentState of
@@ -416,10 +419,21 @@ handleUnlock email password = do
         , [StartCacheRefreshLoop sessionKey]
         )
 
-handleListItems :: (MonadTime m) => CacheEntry -> AgentState -> m (AgentState, Response, [Effect])
-handleListItems cacheEntry agentState = do
+handleListItems :: (MonadTime m) => CacheEntry -> LatestRefreshStatus -> AgentState -> m (AgentState, Response, [Effect])
+handleListItems cacheEntry latestRefreshStatus agentState = do
   now <- currentTime
-  pure (agentState, itemListResponse (cacheEntryItems cacheEntry) (cacheAgeSeconds now cacheEntry), [])
+  pure
+    ( agentState
+    , itemListResponse
+        (cacheEntryItems cacheEntry)
+        (cacheAgeSeconds now cacheEntry)
+        (cacheRefreshStatusFromLatest latestRefreshStatus)
+    , []
+    )
+
+cacheRefreshStatusFromLatest :: LatestRefreshStatus -> CacheRefreshStatus
+cacheRefreshStatusFromLatest LatestRefreshSucceeded = CacheRefreshSucceeded
+cacheRefreshStatusFromLatest (LatestRefreshFailed _) = CacheRefreshFailed
 
 runEffect :: MVar AgentState -> Effect -> AgentT ()
 runEffect agentStateVar effect =
