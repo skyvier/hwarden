@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Hwarden.Response (
   CacheAgeSeconds (..),
@@ -68,11 +69,10 @@ instance ToJSON CacheRefreshStatus where
 
 instance FromJSON CacheRefreshStatus where
   parseJSON =
-    withText "CacheRefreshStatus" $ \value ->
-      case value of
-        "succeeded" -> pure CacheRefreshSucceeded
-        "failed" -> pure CacheRefreshFailed
-        _ -> fail "unknown cache refresh status"
+    withText "CacheRefreshStatus" $ \case
+      "succeeded" -> pure CacheRefreshSucceeded
+      "failed" -> pure CacheRefreshFailed
+      _ -> fail "unknown cache refresh status"
 
 instance Arbitrary CacheRefreshStatus where
   arbitrary =
