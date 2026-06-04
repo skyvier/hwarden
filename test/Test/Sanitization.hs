@@ -5,10 +5,12 @@ import Test.Tasty (TestTree, testGroup)
 import qualified Test.Sanitization.Json as Json
 import qualified Test.Sanitization.Log as Log
 import qualified Test.Sanitization.Show as Show
+import qualified Test.Sanitization.ToLog as ToLog
 
 tests :: TestTree
 tests = testGroup "sanitization"
   [ Json.tests
   , Show.tests
   , Log.tests
+  , ToLog.tests
   ]

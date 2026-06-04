@@ -59,6 +59,7 @@ test-suite hwarden-agent-test
       Test.Integration
     , Test.MockEnv
     , Test.Sanitization 
+    , Test.Sanitization.ToLog
     , Test.Runtime
     , Test.Logging
     , Test.Sanitization.Json
