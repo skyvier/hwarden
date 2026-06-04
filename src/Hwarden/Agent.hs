@@ -31,7 +31,9 @@ module Hwarden.Agent
     cleanupSocket,
     decide,
     handleGetPassword,
+    handleConnectionExceptionBoundary,
     handleListItems,
+    handleRefreshIterationExceptionBoundary,
     handleRefreshResult,
     handleUnlock,
     handleRequest,
@@ -52,6 +54,7 @@ module Hwarden.Agent
 where
 
 import UnliftIO.MVar (MVar, modifyMVar, newMVar)
+import qualified UnliftIO.Exception as Exception
 import Control.Monad.Time (MonadTime, currentTime)
 import Control.Exception (finally)
 import Control.Monad.IO.Class (liftIO)
@@ -318,6 +321,7 @@ handleConnection :: Env -> MVar AgentState -> Socket -> IO ()
 handleConnection agentEnv agentStateVar conn =
   finally
     (runAgentT agentEnv $
+        handleConnectionExceptionBoundary $
         katipAddNamespace socketNamespace $ do
         traceId <- liftIO generateTraceId
         katipAddContext (sl "trace_id" traceId) $ do
@@ -333,6 +337,11 @@ handleConnection agentEnv agentStateVar conn =
           liftIO (NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
           logResponseSent response)
     (close conn)
+
+handleConnectionExceptionBoundary :: AgentT () -> AgentT ()
+handleConnectionExceptionBoundary action =
+  action `Exception.catchAny` \_ ->
+    logInfoS @"connection handling failed" @AgentT
 
 handleRequest :: MVar AgentState -> Request -> AgentT Response
 handleRequest agentStateVar request = do
@@ -430,14 +439,23 @@ startRefreshLoop agentStateVar sessionKey = do
   where
     refreshLoop refreshIntervalMicroseconds = do
       Concurrent.threadDelay refreshIntervalMicroseconds
-      logInfoS @"running item cache refresh" @AgentT
-      refreshResult <- refreshCacheEntry sessionKey
       shouldContinue <-
-        modifyMVar agentStateVar $
-          \agentState -> pure $ handleRefreshResult sessionKey refreshResult agentState
-      logRefreshResult refreshResult shouldContinue
+        handleRefreshIterationExceptionBoundary $ do
+          logInfoS @"running item cache refresh" @AgentT
+          refreshResult <- refreshCacheEntry sessionKey
+          shouldContinue <-
+            modifyMVar agentStateVar $
+              \agentState -> pure $ handleRefreshResult sessionKey refreshResult agentState
+          logRefreshResult refreshResult shouldContinue
+          pure shouldContinue
       when shouldContinue $
         refreshLoop refreshIntervalMicroseconds
+
+handleRefreshIterationExceptionBoundary :: AgentT Bool -> AgentT Bool
+handleRefreshIterationExceptionBoundary action =
+  action `Exception.catchAny` \_ -> do
+    logInfoS @"item cache refresh iteration failed; retrying" @AgentT
+    pure True
 
 handleRefreshResult :: SessionKey -> Either CacheFillFailure CacheEntry -> AgentState -> (AgentState, Bool)
 handleRefreshResult sessionKey refreshResult agentState =
@@ -506,13 +524,13 @@ logRequestDecodeFailure decodeErr =
 logRequestReceived :: forall m. (KatipContext m, MonadLog m) => Request -> m ()
 logRequestReceived request =
   katipAddContext
-    (sl "request" (show request))
+    (sl "request" (toLogText request))
     (logInfoS @"received request" @m)
 
 logResponseSent :: forall m. (KatipContext m, MonadLog m) => Response -> m ()
 logResponseSent response =
   katipAddContext
-    (sl "response" (show response))
+    (sl "response" (toLogText response))
     (logInfoS @"sent response" @m)
 
 socketNamespace :: Namespace
