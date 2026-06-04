@@ -10,7 +10,6 @@ module Hwarden.Bitwarden.Real
   )
 where
 
-import Control.Exception (SomeException, try)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, asks)
 import Data.Aeson (eitherDecodeStrict)
@@ -19,6 +18,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified UnliftIO.Exception as Exception
 import Hwarden.Bitwarden
   ( Bitwarden (..),
     GetPasswordError (..),
@@ -218,12 +218,12 @@ handleCheckedCommand ::
 handleCheckedCommand action unavailable handleSuccess handleFailure = do
   result <-
     liftIO
-      (try action :: IO (Either SomeException (ExitCode, String, String)))
-  pure $
-    case result of
-      Left _ ->
-        Left unavailable
-      Right (exitCode, stdoutText, stderrText) ->
+      (Exception.tryAny action)
+  case result of
+    Left _ ->
+      pure (Left unavailable)
+    Right (exitCode, stdoutText, stderrText) ->
+      pure $
         case exitCode of
           ExitSuccess -> handleSuccess stdoutText
           ExitFailure _ -> Left (handleFailure stderrText)
@@ -238,12 +238,12 @@ handleCheckedByteCommand ::
 handleCheckedByteCommand action unavailable handleSuccess handleFailure = do
   result <-
     liftIO
-      (try action :: IO (Either SomeException (ExitCode, BS.ByteString, BS.ByteString)))
-  pure $
-    case result of
-      Left _ ->
-        Left unavailable
-      Right (exitCode, stdoutBytes, stderrBytes) ->
+      (Exception.tryAny action)
+  case result of
+    Left _ ->
+      pure (Left unavailable)
+    Right (exitCode, stdoutBytes, stderrBytes) ->
+      pure $
         case exitCode of
           ExitSuccess -> handleSuccess stdoutBytes
           ExitFailure _ -> Left (handleFailure stderrBytes)

@@ -76,6 +76,7 @@ test-suite hwarden-agent-test
     , Test.Helpers
     , Test.Agent.Decide
     , Test.JsonCodec
+    , Test.ExceptionLogging
   default-language:    Haskell2010
   build-tool-depends:  hwarden-agent:hwarden-agent
   build-depends:

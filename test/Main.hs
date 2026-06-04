@@ -33,6 +33,7 @@ import qualified Test.StateMachine as StateMachine
 import qualified Test.RequestHandler as RequestHandler
 import qualified Test.JsonCodec as JsonCodec
 import qualified Test.Integration as Integration
+import qualified Test.ExceptionLogging as ExceptionLogging
 
   
 main :: IO ()
@@ -53,6 +54,7 @@ tests =
       StateMachine.tests,
       RequestHandler.tests,
       JsonCodec.tests,
+      ExceptionLogging.tests,
       Integration.tests,
 
       bitwardenServerUrlTests,
