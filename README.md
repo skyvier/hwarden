@@ -54,6 +54,32 @@ Example host configuration:
 }
 ```
 
+Flake-based host configuration:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    hwarden-agent = {
+      url = "github:skyvier/hbw-tools/add-nixos-module";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { nixpkgs, hwarden-agent, ... }: {
+    nixosConfigurations.example-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        hwarden-agent.nixosModules.default
+        {
+          services.hwarden-agent.enable = true;
+        }
+      ];
+    };
+  };
+}
+```
+
 After switching the host configuration, start the service for a logged-in user:
 
 ```sh

@@ -27,5 +27,8 @@ assert !(lib.hasAttr "HWARDEN_BW_PATH" service.environment);
 assert service.environment.HWARDEN_SERVER_URL == "https://vault.bitwarden.com";
 assert service.environment.HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS == "30";
 assert lib.hasSuffix "/bin/hwarden-agent" service.serviceConfig.ExecStart;
+assert service.serviceConfig.RuntimeDirectory == "hwarden";
+assert service.serviceConfig.RuntimeDirectoryMode == "0700";
+assert service.serviceConfig.ReadWritePaths == [ "%t/hwarden" ];
 assert service.wantedBy == [ "default.target" ];
 true
