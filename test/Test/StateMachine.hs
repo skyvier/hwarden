@@ -52,11 +52,11 @@ data Step
 instance Arbitrary Step where
   arbitrary =
     oneof
-      [ UnlockStep <$> arbitrary <*> arbitrary <*> arbitrary,
-        pure StatusStep,
-        ListItemsStep <$> arbitrary,
-        GetPasswordStep <$> arbitrary,
-        pure UnknownStep
+      [ UnlockStep <$> arbitrary <*> arbitrary <*> arbitrary
+      , pure StatusStep
+      , ListItemsStep <$> arbitrary
+      , GetPasswordStep <$> arbitrary
+      , pure UnknownStep
       ]
   shrink = genericShrink
 
@@ -109,17 +109,17 @@ stepMockEnv step =
 
 runHistory :: [Step] -> [Agent.AgentState]
 runHistory = reverse . snd . foldl runOne (Agent.Locked, [])
-  where
-    runOne (state0, states) step =
-      let (state1, _, _) =
-            runMockBitwarden
-              (stepMockEnv step)
-              (Agent.handleRequestWith (stepRequest step) state0)
-       in (state1, state1 : states)
+ where
+  runOne (state0, states) step =
+    let (state1, _, _) =
+          runMockBitwarden
+            (stepMockEnv step)
+            (Agent.handleRequestWith (stepRequest step) state0)
+     in (state1, state1 : states)
 
 isUnlockedState :: Agent.AgentState -> Bool
 isUnlockedState Agent.Locked = False
-isUnlockedState Agent.Unlocked {} = True
+isUnlockedState Agent.Unlocked{} = True
 
 hasSuccessfulUnlockStep :: Step -> Bool
 hasSuccessfulUnlockStep (UnlockStep (Right _) _ _) = True
@@ -138,7 +138,7 @@ allStatesLocked = all isLockedState
 
 isLockedState :: Agent.AgentState -> Bool
 isLockedState Agent.Locked = True
-isLockedState Agent.Unlocked {} = False
+isLockedState Agent.Unlocked{} = False
 
 propertyRemainsLockedUntilSuccessfulUnlock :: [Step] -> Property
 propertyRemainsLockedUntilSuccessfulUnlock steps =

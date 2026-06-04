@@ -3,11 +3,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-module Hwarden.Bitwarden.Real
-  ( RealBitwardenT (..),
-    HasBitwardenCliConfig (..),
-    configureServer,
-  )
+
+module Hwarden.Bitwarden.Real (
+  RealBitwardenT (..),
+  HasBitwardenCliConfig (..),
+  configureServer,
+)
 where
 
 import Control.Monad.IO.Class (MonadIO, liftIO)
@@ -18,34 +19,34 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified UnliftIO.Exception as Exception
-import Hwarden.Bitwarden
-  ( Bitwarden (..),
-    GetPasswordError (..),
-    ListItemsError (..),
-    SyncError (..),
-    UnlockError (..),
-    extractLoginItems
-  )
-import Hwarden.Logging (MonadLog, logInfoS, logInfoF)
-import Hwarden.Types
-  ( LoginItemId (..),
-    Password (Password),
-    PasswordValue (PasswordValue),
-    SessionKey (SessionKey),
-    Username (..)
-  )
+import Hwarden.Bitwarden (
+  Bitwarden (..),
+  GetPasswordError (..),
+  ListItemsError (..),
+  SyncError (..),
+  UnlockError (..),
+  extractLoginItems,
+ )
+import Hwarden.Logging (MonadLog, logInfoF, logInfoS)
+import Hwarden.Types (
+  LoginItemId (..),
+  Password (Password),
+  PasswordValue (PasswordValue),
+  SessionKey (SessionKey),
+  Username (..),
+ )
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.IO (hClose)
-import System.Process
-  ( CreateProcess (env, std_err, std_out),
-    StdStream (CreatePipe),
-    createProcess,
-    proc,
-    readCreateProcessWithExitCode,
-    waitForProcess
-  )
+import System.Process (
+  CreateProcess (env, std_err, std_out),
+  StdStream (CreatePipe),
+  createProcess,
+  proc,
+  readCreateProcessWithExitCode,
+  waitForProcess,
+ )
+import qualified UnliftIO.Exception as Exception
 
 newtype RealBitwardenT r m a = RealBitwardenT
   { unrealBitwarden :: m a
@@ -64,16 +65,17 @@ instance
   unlock username (Password password) = RealBitwardenT $ do
     (logInfoF @"running bw login for %{Username}" username :: m ())
     let args =
-          [ "login",
-            "--nointeraction",
-            T.unpack (unUsername username),
-            "--passwordenv",
-            loginPasswordEnvVar,
-            "--raw"
+          [ "login"
+          , "--nointeraction"
+          , T.unpack (unUsername username)
+          , "--passwordenv"
+          , loginPasswordEnvVar
+          , "--raw"
           ]
     command <-
       isolatedBwProcessWithEnv
-        [(loginPasswordEnvVar, T.unpack password)] args
+        [(loginPasswordEnvVar, T.unpack password)]
+        args
     handleCheckedCommand
       (runCommand command)
       UnlockUnavailable
@@ -104,11 +106,15 @@ instance
       sanitizeSyncFailure
 
   getPassword sessionKey loginItemId = RealBitwardenT $ do
-    (logInfoF
-      @"running bw get password for item id %{LoginItemId}" @m
-      loginItemId :: m ())
+    ( logInfoF
+        @"running bw get password for item id %{LoginItemId}"
+        @m
+        loginItemId ::
+        m ()
+      )
     command <-
-      authenticatedBwProcess sessionKey
+      authenticatedBwProcess
+        sessionKey
         [ "get"
         , "password"
         , T.unpack (unLoginItemId loginItemId)
@@ -167,7 +173,7 @@ isolatedBwProcessWithEnv ::
 isolatedBwProcessWithEnv extraEnv args = do
   cliPath <- asks bitwardenCliPath
   isolatedEnv <- isolatedBwEnv
-  pure (proc cliPath args) {env = Just (foldr (uncurry setEnvVar) isolatedEnv extraEnv)}
+  pure (proc cliPath args){env = Just (foldr (uncurry setEnvVar) isolatedEnv extraEnv)}
 
 authenticatedBwProcess ::
   (MonadIO m, MonadReader r m, HasBitwardenCliConfig r) =>
@@ -198,8 +204,8 @@ runProcessBytes command = do
   (Nothing, Just stdoutHandle, Just stderrHandle, processHandle) <-
     createProcess
       command
-        { std_out = CreatePipe,
-          std_err = CreatePipe
+        { std_out = CreatePipe
+        , std_err = CreatePipe
         }
   stdoutBytes <- BS.hGetContents stdoutHandle
   stderrBytes <- BS.hGetContents stderrHandle
@@ -209,7 +215,7 @@ runProcessBytes command = do
   pure (exitCode, stdoutBytes, stderrBytes)
 
 handleCheckedCommand ::
-  MonadIO m =>
+  (MonadIO m) =>
   IO (ExitCode, String, String) ->
   err ->
   (String -> Either err a) ->
@@ -229,7 +235,7 @@ handleCheckedCommand action unavailable handleSuccess handleFailure = do
           ExitFailure _ -> Left (handleFailure stderrText)
 
 handleCheckedByteCommand ::
-  MonadIO m =>
+  (MonadIO m) =>
   IO (ExitCode, BS.ByteString, BS.ByteString) ->
   err ->
   (BS.ByteString -> Either err a) ->
@@ -253,8 +259,8 @@ sanitizeUnlockFailure stderrText
   | "Code is required" `T.isInfixOf` trimmed = CodeRequired
   | T.null trimmed = UnlockFailed "bw login failed"
   | otherwise = UnlockFailed trimmed
-  where
-    trimmed = T.strip (T.pack stderrText)
+ where
+  trimmed = T.strip (T.pack stderrText)
 
 sanitizeCommandFailure :: String -> Text
 sanitizeCommandFailure stderrText =

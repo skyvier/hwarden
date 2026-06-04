@@ -2,40 +2,39 @@
 
 module Main where
 
-import qualified Data.ByteString as BS
 import Data.Bits ((.&.))
+import qualified Data.ByteString as BS
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.App as App
 import qualified Hwarden.Bitwarden as Bitwarden
-import System.Directory
-  ( createDirectoryIfMissing,
-    doesPathExist,
-    getTemporaryDirectory,
-    removeDirectoryRecursive,
-    removeFile
-  )
+import System.Directory (
+  createDirectoryIfMissing,
+  doesPathExist,
+  getTemporaryDirectory,
+  removeDirectoryRecursive,
+  removeFile,
+ )
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
-import System.Posix.Files
-  ( fileMode,
-    getFileStatus,
-    setFileMode
-  )
+import System.Posix.Files (
+  fileMode,
+  getFileStatus,
+  setFileMode,
+ )
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 
-import qualified Test.Sanitization as Sanitization
-import qualified Test.Cache as Cache
-import qualified Test.Runtime as Runtime
-import qualified Test.Logging as Logging
 import qualified Test.Agent.Decide as Agent.Decide
-import qualified Test.StateMachine as StateMachine
-import qualified Test.RequestHandler as RequestHandler
-import qualified Test.JsonCodec as JsonCodec
-import qualified Test.Integration as Integration
+import qualified Test.Cache as Cache
 import qualified Test.ExceptionLogging as ExceptionLogging
+import qualified Test.Integration as Integration
+import qualified Test.JsonCodec as JsonCodec
+import qualified Test.Logging as Logging
+import qualified Test.RequestHandler as RequestHandler
+import qualified Test.Runtime as Runtime
+import qualified Test.Sanitization as Sanitization
+import qualified Test.StateMachine as StateMachine
 
-  
 main :: IO ()
 main = defaultMain tests
 
@@ -43,24 +42,20 @@ tests :: TestTree
 tests =
   testGroup
     "hwarden-agent"
-    [ 
-      filesystemTests,
-
-      Sanitization.tests,
-      Cache.tests,
-      Runtime.tests,
-      Logging.tests,
-      Agent.Decide.tests,
-      StateMachine.tests,
-      RequestHandler.tests,
-      JsonCodec.tests,
-      ExceptionLogging.tests,
-      Integration.tests,
-
-      bitwardenServerUrlTests,
-      bitwardenCliPathTests
+    [ filesystemTests
+    , Sanitization.tests
+    , Cache.tests
+    , Runtime.tests
+    , Logging.tests
+    , Agent.Decide.tests
+    , StateMachine.tests
+    , RequestHandler.tests
+    , JsonCodec.tests
+    , ExceptionLogging.tests
+    , Integration.tests
+    , bitwardenServerUrlTests
+    , bitwardenCliPathTests
     ]
-
 
 filesystemTests :: TestTree
 filesystemTests =
@@ -106,9 +101,10 @@ filesystemTests =
         removeDirectoryRecursive root
     ]
 
-
 bitwardenServerUrlTests :: TestTree
-bitwardenServerUrlTests = testGroup "determineBitwardenServerUrl"
+bitwardenServerUrlTests =
+  testGroup
+    "determineBitwardenServerUrl"
     [ testCase "determineBitwardenServerUrl uses the EU default when unset" $
         Bitwarden.determineBitwardenServerUrl Nothing
           @?= Bitwarden.defaultBitwardenServerUrl
@@ -118,40 +114,44 @@ bitwardenServerUrlTests = testGroup "determineBitwardenServerUrl"
     ]
 
 bitwardenCliPathTests :: TestTree
-bitwardenCliPathTests = testGroup "Bitwarden CLI path"
-  [ testGroup "parseBitwardenCliPath"
-    [ testCase "parseBitwardenCliPath returns the configured path" $
-      App.parseBitwardenCliPath (Just "/nix/store/test-bw/bin/bw")
-        @?= Right "/nix/store/test-bw/bin/bw"
-    , testCase "parseBitwardenCliPath fails when the path is missing" $
-        App.parseBitwardenCliPath Nothing
-          @?= Left "HWARDEN_BW_PATH is not set"
-    , testCase "parseBitwardenCliPath fails when the path is empty" $
-        App.parseBitwardenCliPath (Just "")
-          @?= Left "HWARDEN_BW_PATH is empty"
+bitwardenCliPathTests =
+  testGroup
+    "Bitwarden CLI path"
+    [ testGroup
+        "parseBitwardenCliPath"
+        [ testCase "parseBitwardenCliPath returns the configured path" $
+            App.parseBitwardenCliPath (Just "/nix/store/test-bw/bin/bw")
+              @?= Right "/nix/store/test-bw/bin/bw"
+        , testCase "parseBitwardenCliPath fails when the path is missing" $
+            App.parseBitwardenCliPath Nothing
+              @?= Left "HWARDEN_BW_PATH is not set"
+        , testCase "parseBitwardenCliPath fails when the path is empty" $
+            App.parseBitwardenCliPath (Just "")
+              @?= Left "HWARDEN_BW_PATH is empty"
+        ]
+    , testGroup
+        "validateBitwardenCliPath"
+        [ testCase "validateBitwardenCliPath accepts an executable file" $ do
+            root <- createTempDir "hwarden-agent-test"
+            let cliPath = root </> "bw"
+            BS.writeFile cliPath ""
+            setFileMode cliPath 0o700
+            validationResult <- App.validateBitwardenCliPath cliPath
+            removeDirectoryRecursive root
+            validationResult @?= Right cliPath
+        , testCase "validateBitwardenCliPath fails when the path does not exist" $
+            App.validateBitwardenCliPath "/definitely/missing/bw"
+              >>= (@?= Left "HWARDEN_BW_PATH does not exist")
+        , testCase "validateBitwardenCliPath fails when the path is not executable" $ do
+            root <- createTempDir "hwarden-agent-test"
+            let cliPath = root </> "bw"
+            BS.writeFile cliPath ""
+            setFileMode cliPath 0o600
+            validationResult <- App.validateBitwardenCliPath cliPath
+            removeDirectoryRecursive root
+            validationResult @?= Left "HWARDEN_BW_PATH is not executable"
+        ]
     ]
-  , testGroup "validateBitwardenCliPath"
-    [ testCase "validateBitwardenCliPath accepts an executable file" $ do
-        root <- createTempDir "hwarden-agent-test"
-        let cliPath = root </> "bw"
-        BS.writeFile cliPath ""
-        setFileMode cliPath 0o700
-        validationResult <- App.validateBitwardenCliPath cliPath
-        removeDirectoryRecursive root
-        validationResult @?= Right cliPath
-    , testCase "validateBitwardenCliPath fails when the path does not exist" $
-        App.validateBitwardenCliPath "/definitely/missing/bw"
-          >>= (@?= Left "HWARDEN_BW_PATH does not exist")
-    , testCase "validateBitwardenCliPath fails when the path is not executable" $ do
-        root <- createTempDir "hwarden-agent-test"
-        let cliPath = root </> "bw"
-        BS.writeFile cliPath ""
-        setFileMode cliPath 0o600
-        validationResult <- App.validateBitwardenCliPath cliPath
-        removeDirectoryRecursive root
-        validationResult @?= Left "HWARDEN_BW_PATH is not executable"
-    ]
-  ]
 
 assertDirectoryOwnerOnly :: FilePath -> IO ()
 assertDirectoryOwnerOnly path = do

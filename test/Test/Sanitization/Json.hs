@@ -4,8 +4,8 @@
 
 module Test.Sanitization.Json (tests) where
 
-import qualified Data.Aeson as Aeson
 import Data.Aeson ((.=))
+import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Text as T
@@ -57,7 +57,7 @@ propertyFailureResponseJsonDoesNotExposeSanitizedSecrets password@(Agent.Passwor
       Agent.failureResponse $
         Agent.SessionSanitizedFailure $
           Sanitize.sanitizeGetPasswordFailure sessionKey ("hostile get-password failure " <> sessionText)
-  in
+   in
     encodedResponseDoesNotExpose passwordText passwordFailure
       .&&. encodedResponseDoesNotExpose sessionText sessionFailure
 
@@ -66,12 +66,12 @@ propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret (Agent.Password 
   let
     payload =
       Aeson.object
-        [ "id" .= ("item-123" :: T.Text),
-          "name" .= ("example item" :: T.Text),
-          "login" .=
-            Aeson.object
-              [ "username" .= ("me@example.com" :: T.Text),
-                "password" .= passwordNeedle
+        [ "id" .= ("item-123" :: T.Text)
+        , "name" .= ("example item" :: T.Text)
+        , "login"
+            .= Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text)
+              , "password" .= passwordNeedle
               ]
         ]
    in
@@ -80,7 +80,7 @@ propertyEncodedLoginItemSummariesDoNotExposeLoginPasswordSecret (Agent.Password 
         let
           encodedSummaries = LBS.toStrict (Aeson.encode (Bitwarden.extractLoginItems [item]))
           passwordBytes = TE.encodeUtf8 passwordNeedle
-        in
+         in
           counterexample (BS.unpack encodedSummaries) $
             not (passwordBytes `BS.isInfixOf` encodedSummaries)
       Aeson.Error err ->
@@ -91,20 +91,20 @@ propertyEncodedLoginItemSummariesDoNotExposeHostileUnknownSecretFields (Agent.Pa
   let
     payload =
       Aeson.object
-        [ "id" .= ("item-123" :: T.Text),
-          "name" .= ("example item" :: T.Text),
-          "notes" .= passwordNeedle,
-          "fields" .=
-            [ Aeson.object
-                [ "name" .= ("hostile-field" :: T.Text),
-                  "value" .= passwordNeedle
-                ]
-            ],
-          "login" .=
-            Aeson.object
-              [ "username" .= ("me@example.com" :: T.Text),
-                "totp" .= passwordNeedle,
-                "passwordRevisionDate" .= passwordNeedle
+        [ "id" .= ("item-123" :: T.Text)
+        , "name" .= ("example item" :: T.Text)
+        , "notes" .= passwordNeedle
+        , "fields"
+            .= [ Aeson.object
+                   [ "name" .= ("hostile-field" :: T.Text)
+                   , "value" .= passwordNeedle
+                   ]
+               ]
+        , "login"
+            .= Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text)
+              , "totp" .= passwordNeedle
+              , "passwordRevisionDate" .= passwordNeedle
               ]
         ]
    in
@@ -113,7 +113,7 @@ propertyEncodedLoginItemSummariesDoNotExposeHostileUnknownSecretFields (Agent.Pa
         let
           encodedSummaries = LBS.toStrict (Aeson.encode (Bitwarden.extractLoginItems [item]))
           passwordBytes = TE.encodeUtf8 passwordNeedle
-        in
+         in
           counterexample (BS.unpack encodedSummaries) $
             not (passwordBytes `BS.isInfixOf` encodedSummaries)
       Aeson.Error err ->
@@ -134,9 +134,10 @@ propertyHandleRequestWithDoesNotExposeSecrets mockEnv request cacheState =
       runMockBitwarden
         leakingEnv
         (Agent.handleRequestWith request currentState)
-  in
+   in
     property $
-      not $ responseLeaksSessionKey currentState response
+      not $
+        responseLeaksSessionKey currentState response
 
 responseLeaksSessionKey :: Agent.AgentState -> Agent.Response -> Bool
 responseLeaksSessionKey Agent.Locked _ = False

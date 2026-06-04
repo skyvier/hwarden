@@ -106,8 +106,7 @@ For pull requests, the workflow runs:
 - `cabal test all`
 - `test/scripts/run-all.sh`
 - `hlint app src test`
-- `ormolu --mode inplace` on a temporary copy of all Haskell files under
-  `app`, `src`, and `test`
+- `fourmolu --config fourmolu.yaml --mode check app src test`
 
 For pushes to `main`, the workflow runs the same checks and then publishes a
 compressed Nix store closure artifact for the wrapped `hwarden-agent` package.
@@ -121,6 +120,12 @@ Run the same checks locally from the pinned Nix shell:
 
 ```sh
 nix-shell --pure shell.nix --run scripts/ci/check
+```
+
+Reformat Haskell source files from the pinned Nix shell:
+
+```sh
+nix-shell --pure shell.nix --run dev/format
 ```
 
 ## Run

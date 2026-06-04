@@ -1,40 +1,40 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Hwarden.Sanitize 
-  ( SanitizedText
-  , getSanitizedText
-  , Secret(..)
-  , trustStaticText
-  , sanitizeUnlockError
-  , sanitizeGetPasswordFailure
-  , sanitizeListItemsFailure
-  , sanitizeSyncFailure
-  )
-  where
+module Hwarden.Sanitize (
+  SanitizedText,
+  getSanitizedText,
+  Secret (..),
+  trustStaticText,
+  sanitizeUnlockError,
+  sanitizeGetPasswordFailure,
+  sanitizeListItemsFailure,
+  sanitizeSyncFailure,
+)
+where
 
+import Data.String (IsString (fromString))
 import Data.Text
 import qualified Data.Text as T
 import GHC.Generics (Generic)
+import Hwarden.Logging (ToLog (..))
 import Hwarden.Types (Password (..), SessionKey (..))
 import Test.QuickCheck
-import Data.String (IsString (fromString))
-import Hwarden.Logging (ToLog (..))
 import Test.QuickCheck.Instances.Text ()
 
-data Secret 
+data Secret
   = Static
   | PasswordSecret
   | SessionSecret
 
-newtype SanitizedText (secretType :: Secret) 
-  = SanitizedText { getSanitizedText :: Text }
+newtype SanitizedText (secretType :: Secret)
+  = SanitizedText {getSanitizedText :: Text}
   deriving stock (Generic)
   deriving newtype (Eq, Show)
 
@@ -70,27 +70,27 @@ instance Arbitrary (SanitizedText PasswordSecret) where
   shrink = genericShrink
 
 mkPasswordSanitized :: Text -> SanitizedText PasswordSecret
-mkPasswordSanitized = SanitizedText 
+mkPasswordSanitized = SanitizedText
 
 instance Arbitrary (SanitizedText SessionSecret) where
   arbitrary = mkSessionSanitized . T.pack <$> arbitrary
   shrink = genericShrink
 
 mkSessionSanitized :: Text -> SanitizedText SessionSecret
-mkSessionSanitized = SanitizedText 
+mkSessionSanitized = SanitizedText
 
 sanitizeUnlockError :: Password -> Text -> SanitizedText PasswordSecret
 sanitizeUnlockError (Password password) err =
-  let 
+  let
     sanitized =
-      if T.null password 
-         then err 
-         else T.replace password "<redacted>" err
+      if T.null password
+        then err
+        else T.replace password "<redacted>" err
     trimmed = T.strip sanitized
-  in 
-    if T.null trimmed 
-       then SanitizedText "bw login failed" 
-       else SanitizedText trimmed
+   in
+    if T.null trimmed
+      then SanitizedText "bw login failed"
+      else SanitizedText trimmed
 
 sanitizeListItemsFailure :: SessionKey -> Text -> SanitizedText SessionSecret
 sanitizeListItemsFailure =
@@ -107,13 +107,13 @@ sanitizeGetPasswordFailure =
 -- Fallbacks must be static non-secret text.
 sanitizeSessionKey :: Text -> SessionKey -> Text -> SanitizedText SessionSecret
 sanitizeSessionKey fallback (SessionKey sessionKey) err =
-  let 
+  let
     sanitized =
-      if T.null sessionKey 
-         then err 
-         else T.replace sessionKey "<redacted>" err
+      if T.null sessionKey
+        then err
+        else T.replace sessionKey "<redacted>" err
     trimmed = T.strip sanitized
-   in 
-    if T.null trimmed 
-       then SanitizedText fallback 
-       else SanitizedText trimmed
+   in
+    if T.null trimmed
+      then SanitizedText fallback
+      else SanitizedText trimmed

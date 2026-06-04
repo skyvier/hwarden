@@ -1,18 +1,18 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Hwarden.Bitwarden
-  ( Bitwarden (..),
-    GetPasswordError (..),
-    ListItemsError (..),
-    SyncError (..),
-    UnlockError (..),
-    BwItem (..),
-    BwLogin (..),
-    defaultBitwardenServerUrl,
-    determineBitwardenServerUrl,
-    extractLoginItems
-  )
+module Hwarden.Bitwarden (
+  Bitwarden (..),
+  GetPasswordError (..),
+  ListItemsError (..),
+  SyncError (..),
+  UnlockError (..),
+  BwItem (..),
+  BwLogin (..),
+  defaultBitwardenServerUrl,
+  determineBitwardenServerUrl,
+  extractLoginItems,
+)
 where
 
 import Data.Aeson (FromJSON (parseJSON), withObject, (.:), (.:?))
@@ -20,14 +20,14 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
-import Hwarden.Types
-  ( ItemSummary (ItemSummary),
-    LoginItemId,
-    Password,
-    PasswordValue,
-    SessionKey,
-    Username
-  )
+import Hwarden.Types (
+  ItemSummary (ItemSummary),
+  LoginItemId,
+  Password,
+  PasswordValue,
+  SessionKey,
+  Username,
+ )
 import Test.QuickCheck (oneof)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
@@ -56,37 +56,37 @@ data SyncError
 instance Arbitrary UnlockError where
   arbitrary =
     oneof
-      [ pure UnlockUnavailable,
-        pure CodeRequired,
-        UnlockFailed . T.pack <$> arbitrary
+      [ pure UnlockUnavailable
+      , pure CodeRequired
+      , UnlockFailed . T.pack <$> arbitrary
       ]
   shrink = genericShrink
 
 instance Arbitrary ListItemsError where
   arbitrary =
     oneof
-      [ pure ListItemsUnavailable,
-        ListItemsFailed . T.pack <$> arbitrary
+      [ pure ListItemsUnavailable
+      , ListItemsFailed . T.pack <$> arbitrary
       ]
   shrink = genericShrink
 
 instance Arbitrary GetPasswordError where
   arbitrary =
     oneof
-      [ pure GetPasswordUnavailable,
-        GetPasswordFailed . T.pack <$> arbitrary
+      [ pure GetPasswordUnavailable
+      , GetPasswordFailed . T.pack <$> arbitrary
       ]
   shrink = genericShrink
 
 instance Arbitrary SyncError where
   arbitrary =
     oneof
-      [ pure SyncUnavailable,
-        SyncFailed . T.pack <$> arbitrary
+      [ pure SyncUnavailable
+      , SyncFailed . T.pack <$> arbitrary
       ]
   shrink = genericShrink
 
-class Monad m => Bitwarden m where
+class (Monad m) => Bitwarden m where
   unlock :: Username -> Password -> m (Either UnlockError SessionKey)
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
   sync :: SessionKey -> m (Either SyncError ())
@@ -99,9 +99,9 @@ determineBitwardenServerUrl :: Maybe String -> Text
 determineBitwardenServerUrl = maybe defaultBitwardenServerUrl T.pack
 
 data BwItem = BwItem
-  { bwItemId :: Text,
-    bwItemName :: Text,
-    bwItemLogin :: Maybe BwLogin
+  { bwItemId :: Text
+  , bwItemName :: Text
+  , bwItemLogin :: Maybe BwLogin
   }
   deriving (Eq, Show)
 

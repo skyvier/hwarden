@@ -15,21 +15,22 @@ import qualified Hwarden.Agent as Agent
 
 tests :: TestTree
 tests =
-  testGroup "unlock"
-  [ testProperty "given a locked state, successful unlock action transitions state to unlocked" $
-      propertyHandleRequestWithUnlockSuccess
-  , testProperty "given a locked state, an unsuccessful unlock operation results in unchanged state, failure response and no effects" $
-      propertyHandleRequestWithUnlockFailure
-  , testProperty "given an unlocked state, unlock request handling returns unchanged state, \"already unlocked\" response and no effects" $
-      propertyHandleRequestWithUnlockedRequestIsIgnored
-  , testProperty "a refresh loop effect is only emitted by a successful unlock from the locked state" $
-      propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop
-  ]
+  testGroup
+    "unlock"
+    [ testProperty "given a locked state, successful unlock action transitions state to unlocked" $
+        propertyHandleRequestWithUnlockSuccess
+    , testProperty "given a locked state, an unsuccessful unlock operation results in unchanged state, failure response and no effects" $
+        propertyHandleRequestWithUnlockFailure
+    , testProperty "given an unlocked state, unlock request handling returns unchanged state, \"already unlocked\" response and no effects" $
+        propertyHandleRequestWithUnlockedRequestIsIgnored
+    , testProperty "a refresh loop effect is only emitted by a successful unlock from the locked state" $
+        propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop
+    ]
 
-propertyHandleRequestWithUnlockSuccess
-  :: Agent.SessionKey
-  -> MockEnv
-  -> Property
+propertyHandleRequestWithUnlockSuccess ::
+  Agent.SessionKey ->
+  MockEnv ->
+  Property
 propertyHandleRequestWithUnlockSuccess sessionKey mockEnv =
   let
     request =
@@ -40,7 +41,7 @@ propertyHandleRequestWithUnlockSuccess sessionKey mockEnv =
       runMockBitwarden
         (mockEnv & withUnlockResult (Right sessionKey))
         (Agent.handleRequestWith request Agent.Locked)
-  in
+   in
     property $
       case newState of
         Agent.Unlocked unlockedSessionKey _ ->
@@ -50,12 +51,12 @@ propertyHandleRequestWithUnlockSuccess sessionKey mockEnv =
         Agent.Locked ->
           False
 
-propertyHandleRequestWithUnlockFailure
-  :: Agent.UnlockError
-  -> Agent.Username
-  -> Agent.Password
-  -> MockEnv
-  -> Property
+propertyHandleRequestWithUnlockFailure ::
+  Agent.UnlockError ->
+  Agent.Username ->
+  Agent.Password ->
+  MockEnv ->
+  Property
 propertyHandleRequestWithUnlockFailure unlockError username password mockEnv =
   let
     request = Agent.UnlockRequest username password
@@ -65,7 +66,7 @@ propertyHandleRequestWithUnlockFailure unlockError username password mockEnv =
       runMockBitwarden
         (mockEnv & withUnlockResult (Left unlockError))
         (Agent.handleRequestWith request Agent.Locked)
-  in
+   in
     property $
       newState == Agent.Locked
         && response == expectedResponse
@@ -73,31 +74,31 @@ propertyHandleRequestWithUnlockFailure unlockError username password mockEnv =
           (encodedResponseContains (T.unpack rawPassword) response)
         && effects == []
 
-propertyHandleRequestWithUnlockedRequestIsIgnored
-  :: Agent.SessionKey
-  -> Agent.ItemCacheState
-  -> Agent.Username
-  -> Agent.Password
-  -> MockEnv
-  -> Property
+propertyHandleRequestWithUnlockedRequestIsIgnored ::
+  Agent.SessionKey ->
+  Agent.ItemCacheState ->
+  Agent.Username ->
+  Agent.Password ->
+  MockEnv ->
+  Property
 propertyHandleRequestWithUnlockedRequestIsIgnored
   sessionKey
   cacheState
   username
   password
   mockEnv =
-  let
-    request = Agent.UnlockRequest username password
-    currentState = Agent.Unlocked sessionKey cacheState
-    (newState, response, effects) =
-      runMockBitwarden
-        mockEnv
-        (Agent.handleRequestWith request currentState)
-  in
-    property $
-      newState == currentState
-        && response == Agent.successResponse "already unlocked"
-        && effects == []
+    let
+      request = Agent.UnlockRequest username password
+      currentState = Agent.Unlocked sessionKey cacheState
+      (newState, response, effects) =
+        runMockBitwarden
+          mockEnv
+          (Agent.handleRequestWith request currentState)
+     in
+      property $
+        newState == currentState
+          && response == Agent.successResponse "already unlocked"
+          && effects == []
 
 propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop ::
   Agent.Request ->
@@ -108,7 +109,7 @@ propertyHandleRequestWithOnlyLockedUnlockStartsRefreshLoop request initialState 
   let
     (newState, _, effects) =
       runMockBitwarden mockEnv (Agent.handleRequestWith request initialState)
-  in
+   in
     property $
       case effects of
         [] -> True
