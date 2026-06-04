@@ -141,21 +141,6 @@ Environment:
 cabal run hwarden-agent
 ```
 
-In the pinned Nix shell, you can also run the wrapped executable directly:
-
-```sh
-hwarden-agent
-```
-
-To print the wrapped build revision:
-
-```sh
-hwarden-agent version
-```
-
-In the pinned Nix shell this prints the injected short git hash. Outside that
-wrapper context it falls back to `unknown`.
-
 The daemon creates:
 
 ```text

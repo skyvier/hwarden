@@ -32,11 +32,9 @@ hpkgs.shellFor {
     pkgs.haskellPackages.ormolu
     pkgs.zstd
     bitwardenCli
-    wrappedHwardenAgent
   ];
   shellHook = ''
     export HWARDEN_BW_PATH="${bitwardenCli}/bin/bw"
     export NIX_PATH="nixpkgs=${lockedNixpkgs.src}"
-    export PATH="${wrappedHwardenAgent}/bin:$PATH"
   '';
 }
