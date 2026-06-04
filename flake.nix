@@ -2,7 +2,7 @@
   description = "hwarden-agent";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/687f05a9184cad4eaf905c48b63649e3a86f5433";
   };
 
   outputs = { self, nixpkgs }:
@@ -15,10 +15,12 @@
       packages = forAllSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          hpkgs = import ./nix/haskell-packages.nix { inherit pkgs; };
         in
         rec {
           default = pkgs.callPackage ./nix/package.nix {
             inherit sourceRevision;
+            haskellPackages = hpkgs;
           };
           hwarden-agent = default;
         });
