@@ -29,7 +29,7 @@ hpkgs.shellFor {
     pkgs.glow
     pkgs.entr
     pkgs.haskellPackages.hlint
-    pkgs.haskellPackages.ormolu
+    pkgs.haskellPackages.fourmolu
     pkgs.zstd
     pkgs.git
     bitwardenCli

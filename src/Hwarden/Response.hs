@@ -2,49 +2,49 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Hwarden.Response
-  ( CacheAgeSeconds (..),
-    FailureMessage (..),
-    Response,
-    failureResponse,
-    itemListResponse,
-    passwordResultResponse,
-    responseErrorText,
-    responseItems,
-    responsePasswordResult,
-    responseIsFailure,
-    successResponse,
-  )
+module Hwarden.Response (
+  CacheAgeSeconds (..),
+  FailureMessage (..),
+  Response,
+  failureResponse,
+  itemListResponse,
+  passwordResultResponse,
+  responseErrorText,
+  responseItems,
+  responsePasswordResult,
+  responseIsFailure,
+  successResponse,
+)
 where
 
 import Control.Applicative ((<|>))
-import Data.Aeson
-  ( FromJSON (parseJSON),
-    ToJSON (toJSON),
-    object,
-    withObject,
-    (.:),
-    (.=)
-  )
+import Data.Aeson (
+  FromJSON (parseJSON),
+  ToJSON (toJSON),
+  object,
+  withObject,
+  (.:),
+  (.=),
+ )
 import Data.String (IsString (fromString))
 import Data.Text (Text)
+import qualified Data.Text as T
 import GHC.Generics (Generic)
-import Hwarden.Sanitize
-  ( SanitizedText,
-    Secret (PasswordSecret, SessionSecret, Static),
-    getSanitizedText,
-    trustStaticText
-  )
-import Hwarden.Types
-  ( ItemSummary,
-    LoginItemId (LoginItemId),
-    PasswordValue (PasswordValue)
-  )
+import Hwarden.Logging
+import Hwarden.Sanitize (
+  SanitizedText,
+  Secret (PasswordSecret, SessionSecret, Static),
+  getSanitizedText,
+  trustStaticText,
+ )
+import Hwarden.Types (
+  ItemSummary,
+  LoginItemId (LoginItemId),
+  PasswordValue (PasswordValue),
+ )
 import Test.QuickCheck (NonNegative (getNonNegative), oneof)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
-import qualified Data.Text as T
-import Hwarden.Logging
 
 newtype CacheAgeSeconds = CacheAgeSeconds Int
   deriving (Eq, Show)
@@ -64,20 +64,20 @@ data FailureMessage
 instance IsString FailureMessage where
   fromString = StaticFailure . fromString
 
-instance ToLog FailureMessage where 
-  toLogText (StaticFailure sanitizedText) = 
+instance ToLog FailureMessage where
+  toLogText (StaticFailure sanitizedText) =
     toLogText sanitizedText
-  toLogText (PasswordSanitizedFailure sanitizedText) = 
+  toLogText (PasswordSanitizedFailure sanitizedText) =
     toLogText sanitizedText
-  toLogText (SessionSanitizedFailure sanitizedText) = 
+  toLogText (SessionSanitizedFailure sanitizedText) =
     toLogText sanitizedText
 
 instance Arbitrary FailureMessage where
-  arbitrary = 
+  arbitrary =
     oneof
-      [ StaticFailure . trustStaticText . T.pack <$> arbitrary,
-        PasswordSanitizedFailure <$> arbitrary,
-        SessionSanitizedFailure <$> arbitrary
+      [ StaticFailure . trustStaticText . T.pack <$> arbitrary
+      , PasswordSanitizedFailure <$> arbitrary
+      , SessionSanitizedFailure <$> arbitrary
       ]
   shrink = genericShrink
 
@@ -103,25 +103,25 @@ instance ToLog Response where
 instance ToJSON Response where
   toJSON (Success message) =
     object
-      [ "ok" .= True,
-        "message" .= message
+      [ "ok" .= True
+      , "message" .= message
       ]
   toJSON (ItemList items (CacheAgeSeconds cacheAgeSecondsValue)) =
     object
-      [ "ok" .= True,
-        "items" .= items,
-        "cache_age_seconds" .= cacheAgeSecondsValue
+      [ "ok" .= True
+      , "items" .= items
+      , "cache_age_seconds" .= cacheAgeSecondsValue
       ]
   toJSON (PasswordResult (LoginItemId passwordItemId) (PasswordValue password)) =
     object
-      [ "ok" .= True,
-        "id" .= passwordItemId,
-        "password" .= password
+      [ "ok" .= True
+      , "id" .= passwordItemId
+      , "password" .= password
       ]
   toJSON (Failure err) =
     object
-      [ "ok" .= False,
-        "error" .= renderFailureMessage err
+      [ "ok" .= False
+      , "error" .= renderFailureMessage err
       ]
 
 instance FromJSON Response where
@@ -135,12 +135,12 @@ instance FromJSON Response where
       else Failure . StaticFailure . trustStaticText <$> obj .: "error"
 
 instance Arbitrary Response where
-  arbitrary = 
+  arbitrary =
     oneof
-      [ successResponse . T.pack <$> arbitrary,
-        itemListResponse <$> arbitrary <*> arbitrary,
-        passwordResultResponse <$> arbitrary <*> arbitrary,
-        failureResponse <$> arbitrary
+      [ successResponse . T.pack <$> arbitrary
+      , itemListResponse <$> arbitrary <*> arbitrary
+      , passwordResultResponse <$> arbitrary <*> arbitrary
+      , failureResponse <$> arbitrary
       ]
   shrink = genericShrink
 
@@ -169,7 +169,7 @@ responsePasswordResult (PasswordResult loginItemId password) = Just (loginItemId
 responsePasswordResult _ = Nothing
 
 responseIsFailure :: Response -> Bool
-responseIsFailure Failure {} = True
+responseIsFailure Failure{} = True
 responseIsFailure _ = False
 
 renderFailureMessage :: FailureMessage -> Text

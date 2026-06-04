@@ -1,21 +1,21 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Test.MockEnv
-  ( MockEnv (..),
-    MockBitwarden (..),
-    runMockBitwarden,
-    defaultMockEnv,
-    mockNow,
-    withUnlockResult,
-    withListItemsResult,
-    withGetPasswordResult,
-    withSyncResult
-  )
+module Test.MockEnv (
+  MockEnv (..),
+  MockBitwarden (..),
+  runMockBitwarden,
+  defaultMockEnv,
+  mockNow,
+  withUnlockResult,
+  withListItemsResult,
+  withGetPasswordResult,
+  withSyncResult,
+)
 where
 
-import Data.Time.Clock (UTCTime)
 import Control.Monad.Time
+import Data.Time.Clock (UTCTime)
 import GHC.Generics (Generic)
 
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
@@ -56,11 +56,11 @@ instance MonadTime MockBitwarden where
   monotonicTime = pure 0
 
 data MockEnv = MockEnv
-  { unlockResult :: Either Agent.UnlockError Agent.SessionKey,
-    listItemsResult :: Either Agent.ListItemsError [Agent.ItemSummary],
-    syncResult :: Either Bitwarden.SyncError (),
-    getPasswordResult :: Either Bitwarden.GetPasswordError Agent.PasswordValue,
-    mockCurrentTime :: UTCTime
+  { unlockResult :: Either Agent.UnlockError Agent.SessionKey
+  , listItemsResult :: Either Agent.ListItemsError [Agent.ItemSummary]
+  , syncResult :: Either Bitwarden.SyncError ()
+  , getPasswordResult :: Either Bitwarden.GetPasswordError Agent.PasswordValue
+  , mockCurrentTime :: UTCTime
   }
   deriving (Eq, Show, Generic)
 
@@ -75,30 +75,30 @@ mockNow = read "2026-05-20 12:00:05 UTC"
 defaultMockEnv :: MockEnv
 defaultMockEnv =
   MockEnv
-    { unlockResult = Left Agent.UnlockUnavailable,
-      listItemsResult = Left (Agent.ListItemsFailed "bw list items failed"),
-      syncResult = Left Bitwarden.SyncUnavailable,
-      getPasswordResult = Left Bitwarden.GetPasswordUnavailable,
-      mockCurrentTime = mockNow
+    { unlockResult = Left Agent.UnlockUnavailable
+    , listItemsResult = Left (Agent.ListItemsFailed "bw list items failed")
+    , syncResult = Left Bitwarden.SyncUnavailable
+    , getPasswordResult = Left Bitwarden.GetPasswordUnavailable
+    , mockCurrentTime = mockNow
     }
 
 withUnlockResult ::
   Either Agent.UnlockError Agent.SessionKey ->
   MockEnv ->
   MockEnv
-withUnlockResult result mockEnv = mockEnv {unlockResult = result}
+withUnlockResult result mockEnv = mockEnv{unlockResult = result}
 
 withListItemsResult ::
   Either Agent.ListItemsError [Agent.ItemSummary] ->
   MockEnv ->
   MockEnv
-withListItemsResult result mockEnv = mockEnv {listItemsResult = result}
+withListItemsResult result mockEnv = mockEnv{listItemsResult = result}
 
 withGetPasswordResult ::
   Either Bitwarden.GetPasswordError Agent.PasswordValue ->
   MockEnv ->
   MockEnv
-withGetPasswordResult result mockEnv = mockEnv {getPasswordResult = result}
+withGetPasswordResult result mockEnv = mockEnv{getPasswordResult = result}
 
 withSyncResult :: Either Bitwarden.SyncError () -> MockEnv -> MockEnv
-withSyncResult result mockEnv = mockEnv {syncResult = result}
+withSyncResult result mockEnv = mockEnv{syncResult = result}

@@ -10,9 +10,4 @@ cabal test all
 bash test/scripts/run-all.sh
 hlint app src test
 
-format_tmp=$(mktemp -d)
-trap 'rm -rf "$format_tmp"' EXIT
-
-cp -R app src test "$format_tmp/"
-mapfile -t haskell_files < <(find "$format_tmp" -name '*.hs' -print | sort)
-ormolu --mode inplace "${haskell_files[@]}"
+fourmolu --config "$ROOT_DIR/fourmolu.yaml" --mode check app src test

@@ -51,7 +51,7 @@ propertyUnlockLogsDoNotExposeSecrets =
       Agent.UnlockRequest
         (Agent.Username "me@example.com")
         (Agent.Password "password-value")
-  in
+   in
     propertyRequestLogsDoNotExposeSecrets request
 
 propertyRequestLogsDoNotExposeSecrets ::
@@ -68,7 +68,7 @@ propertyRequestLogsDoNotExposeSecrets
         runLoggingMockBitwarden
           mockEnv
           (loggedHandleRequestWith req agentState)
-    in
+     in
       counterexample (show logs) $
         assertLogsDoNotExposeSecrets
           [ "session-key"
@@ -139,11 +139,11 @@ instance MonadTime LoggingMockBitwarden where
   monotonicTime =
     pure 0
 
-newtype AgentStateWithSessionKey (sessionKey :: Symbol) =
-  AgentStateWithSessionKey Agent.AgentState
+newtype AgentStateWithSessionKey (sessionKey :: Symbol)
+  = AgentStateWithSessionKey Agent.AgentState
   deriving newtype (Show, Eq)
 
-instance KnownSymbol sessionKey => Arbitrary (AgentStateWithSessionKey sessionKey) where
+instance (KnownSymbol sessionKey) => Arbitrary (AgentStateWithSessionKey sessionKey) where
   arbitrary = do
     let sessionKeyText = T.pack $ symbolVal (Proxy @sessionKey)
     unlockedSession <- Agent.Unlocked (Agent.SessionKey sessionKeyText) <$> arbitrary

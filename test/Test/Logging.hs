@@ -9,16 +9,16 @@ module Test.Logging (tests) where
 import Control.Monad.Writer.Strict (Writer, execWriter, tell)
 import Data.Text (Text)
 import GHC.Generics (Generic)
-import Hwarden.Logging
-  ( MonadLog (..),
-    ToLog (..),
-    field,
-    logInfoF,
-    logInfoS,
-    renderLogMessage
-  )
-import Hwarden.Sanitize (sanitizeListItemsFailure)
 import qualified Hwarden.Agent as Agent
+import Hwarden.Logging (
+  MonadLog (..),
+  ToLog (..),
+  field,
+  logInfoF,
+  logInfoS,
+  renderLogMessage,
+ )
+import Hwarden.Sanitize (sanitizeListItemsFailure)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 

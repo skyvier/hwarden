@@ -8,9 +8,11 @@ import qualified Test.Sanitization.Show as Show
 import qualified Test.Sanitization.ToLog as ToLog
 
 tests :: TestTree
-tests = testGroup "sanitization"
-  [ Json.tests
-  , Show.tests
-  , Log.tests
-  , ToLog.tests
-  ]
+tests =
+  testGroup
+    "sanitization"
+    [ Json.tests
+    , Show.tests
+    , Log.tests
+    , ToLog.tests
+    ]

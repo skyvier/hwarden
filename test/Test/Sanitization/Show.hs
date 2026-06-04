@@ -3,8 +3,8 @@
 
 module Test.Sanitization.Show (tests) where
 
-import qualified Data.Aeson as Aeson
 import Data.Aeson ((.=))
+import qualified Data.Aeson as Aeson
 import qualified Data.Text as T
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
@@ -14,48 +14,56 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.QuickCheck
 
 tests :: TestTree
-tests = testGroup "show instances"
-  [ testGroup "secret newtypes"
-    [ testProperty "Password show never exposes the password" $
-        propertyPasswordShowDoesNotExposePassword
-    , testProperty "PasswordValue show never exposes the password" $
-        propertyPasswordValueShowDoesNotExposePassword
-    , testProperty "SessionKey show never exposes the session key" $
-        propertySessionKeyShowDoesNotExposeSessionKey
+tests =
+  testGroup
+    "show instances"
+    [ testGroup
+        "secret newtypes"
+        [ testProperty "Password show never exposes the password" $
+            propertyPasswordShowDoesNotExposePassword
+        , testProperty "PasswordValue show never exposes the password" $
+            propertyPasswordValueShowDoesNotExposePassword
+        , testProperty "SessionKey show never exposes the session key" $
+            propertySessionKeyShowDoesNotExposeSessionKey
+        ]
+    , testGroup
+        "instance Show Request"
+        [ testProperty "unlock request show never exposes the password" $
+            propertyUnlockRequestShowDoesNotExposePassword
+        ]
+    , testGroup
+        "instance Show Response"
+        [ testProperty "password-result response show never exposes the plaintext password" $
+            propertyPasswordResultShowDoesNotExposePassword
+        , testProperty "failure response show never exposes sanitized secrets" $
+            propertyFailureResponseShowDoesNotExposeSanitizedSecrets
+        ]
+    , testGroup
+        "agent internals"
+        [ testProperty "agent state show never exposes the session key" $
+            propertyAgentStateShowDoesNotExposeSessionKey
+        , testProperty "effect show never exposes the session key" $
+            propertyEffectShowDoesNotExposeSessionKey
+        , testProperty "decision show never exposes secrets" $
+            propertyDecisionShowDoesNotExposeSecrets
+        ]
+    , testGroup
+        "cache sanitization"
+        [ testProperty "CacheFillFailure show never exposes session secrets" $
+            propertyCacheFillFailureMappingsDoNotExposeSessionSecrets
+        , testProperty "LatestRefreshStatus show never exposes session secrets" $
+            propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
+        , testProperty "ItemCacheState show never exposes session secrets" $
+            propertyItemCacheStateShowDoesNotExposeSessionSecrets
+        ]
+    , testGroup
+        "BwItem sanitization"
+        [ testProperty "BwItem show does not expose login.password secrets" $
+            propertyBwItemShowDoesNotExposeLoginPasswordSecret
+        , testProperty "BwItem show does not expose hostile unknown secret fields" $
+            propertyBwItemShowDoesNotExposeHostileUnknownSecretFields
+        ]
     ]
-  , testGroup "instance Show Request"
-    [ testProperty "unlock request show never exposes the password" $
-        propertyUnlockRequestShowDoesNotExposePassword
-    ]
-  , testGroup "instance Show Response"
-    [ testProperty "password-result response show never exposes the plaintext password" $
-        propertyPasswordResultShowDoesNotExposePassword
-    , testProperty "failure response show never exposes sanitized secrets" $
-        propertyFailureResponseShowDoesNotExposeSanitizedSecrets
-    ]
-  , testGroup "agent internals"
-    [ testProperty "agent state show never exposes the session key" $
-        propertyAgentStateShowDoesNotExposeSessionKey
-    , testProperty "effect show never exposes the session key" $
-        propertyEffectShowDoesNotExposeSessionKey
-    , testProperty "decision show never exposes secrets" $
-        propertyDecisionShowDoesNotExposeSecrets
-    ]
-  , testGroup "cache sanitization"
-    [ testProperty "CacheFillFailure show never exposes session secrets" $
-        propertyCacheFillFailureMappingsDoNotExposeSessionSecrets
-    , testProperty "LatestRefreshStatus show never exposes session secrets" $
-        propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
-    , testProperty "ItemCacheState show never exposes session secrets" $
-        propertyItemCacheStateShowDoesNotExposeSessionSecrets
-    ]
-  , testGroup "BwItem sanitization"
-    [ testProperty "BwItem show does not expose login.password secrets" $
-        propertyBwItemShowDoesNotExposeLoginPasswordSecret
-    , testProperty "BwItem show does not expose hostile unknown secret fields" $
-        propertyBwItemShowDoesNotExposeHostileUnknownSecretFields
-    ]
-  ]
 
 propertyPasswordShowDoesNotExposePassword :: Agent.Password -> Property
 propertyPasswordShowDoesNotExposePassword password@(Agent.Password secretText) =
@@ -92,7 +100,7 @@ propertyFailureResponseShowDoesNotExposeSanitizedSecrets password@(Agent.Passwor
       Agent.failureResponse $
         Agent.SessionSanitizedFailure $
           Sanitize.sanitizeGetPasswordFailure sessionKey ("hostile get-password failure " <> sessionText)
-  in
+   in
     showDoesNotExpose passwordText passwordFailure
       .&&. showDoesNotExpose sessionText sessionFailure
 
@@ -126,13 +134,13 @@ propertyCacheFillFailureMappingsDoNotExposeSessionSecrets sessionKey@(Agent.Sess
       Cache.syncErrorToCacheFillFailure
         sessionKey
         (Bitwarden.SyncFailed ("hostile sync failure " <> secretText))
-  in
+   in
     showDoesNotExpose secretText listItemsFailure
       .&&. showDoesNotExpose secretText syncFailure
 
-propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets
-  :: Agent.SessionKey
-  -> Property
+propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets ::
+  Agent.SessionKey ->
+  Property
 propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets sessionKey@(Agent.SessionKey secretText) =
   let
     listItemsStatus =
@@ -146,7 +154,7 @@ propertyLatestRefreshStatusDoesNotExposeHostileBackendSecrets sessionKey@(Agent.
         Cache.syncErrorToCacheFillFailure
           sessionKey
           (Bitwarden.SyncFailed ("hostile sync failure " <> secretText))
-  in
+   in
     showDoesNotExpose secretText listItemsStatus
       .&&. showDoesNotExpose secretText syncStatus
 
@@ -157,7 +165,7 @@ propertyItemCacheStateShowDoesNotExposeSessionSecrets sessionKey@(Agent.SessionK
       Cache.cacheFillFailureFromListItemsError
         sessionKey
         (Agent.ListItemsFailed ("hostile list-items failure " <> secretText))
-  in
+   in
     showDoesNotExpose secretText (Agent.CacheFillError cacheFillFailure)
       .&&. showDoesNotExpose secretText (Agent.CacheReady cacheEntry (Agent.LatestRefreshFailed cacheFillFailure))
 
@@ -166,12 +174,12 @@ propertyBwItemShowDoesNotExposeLoginPasswordSecret (Agent.Password passwordNeedl
   let
     payload =
       Aeson.object
-        [ "id" .= ("item-123" :: T.Text),
-          "name" .= ("example item" :: T.Text),
-          "login" .=
-            Aeson.object
-              [ "username" .= ("me@example.com" :: T.Text),
-                "password" .= passwordNeedle
+        [ "id" .= ("item-123" :: T.Text)
+        , "name" .= ("example item" :: T.Text)
+        , "login"
+            .= Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text)
+              , "password" .= passwordNeedle
               ]
         ]
    in
@@ -186,20 +194,20 @@ propertyBwItemShowDoesNotExposeHostileUnknownSecretFields (Agent.Password passwo
   let
     payload =
       Aeson.object
-        [ "id" .= ("item-123" :: T.Text),
-          "name" .= ("example item" :: T.Text),
-          "notes" .= passwordNeedle,
-          "fields" .=
-            [ Aeson.object
-                [ "name" .= ("hostile-field" :: T.Text),
-                  "value" .= passwordNeedle
-                ]
-            ],
-          "login" .=
-            Aeson.object
-              [ "username" .= ("me@example.com" :: T.Text),
-                "totp" .= passwordNeedle,
-                "passwordRevisionDate" .= passwordNeedle
+        [ "id" .= ("item-123" :: T.Text)
+        , "name" .= ("example item" :: T.Text)
+        , "notes" .= passwordNeedle
+        , "fields"
+            .= [ Aeson.object
+                   [ "name" .= ("hostile-field" :: T.Text)
+                   , "value" .= passwordNeedle
+                   ]
+               ]
+        , "login"
+            .= Aeson.object
+              [ "username" .= ("me@example.com" :: T.Text)
+              , "totp" .= passwordNeedle
+              , "passwordRevisionDate" .= passwordNeedle
               ]
         ]
    in
@@ -209,7 +217,7 @@ propertyBwItemShowDoesNotExposeHostileUnknownSecretFields (Agent.Password passwo
       Aeson.Error err ->
         counterexample err False
 
-showDoesNotExpose :: Show a => T.Text -> a -> Property
+showDoesNotExpose :: (Show a) => T.Text -> a -> Property
 showDoesNotExpose secretText value =
   let rendered = T.pack (show value)
    in counterexample (show value) $

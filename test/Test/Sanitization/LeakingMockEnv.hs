@@ -6,9 +6,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Test.Sanitization.LeakingMockEnv
-  ( LeakingMockEnv (..)
-  ) where
+module Test.Sanitization.LeakingMockEnv (
+  LeakingMockEnv (..),
+) where
 
 import Data.Data
 import qualified Data.Text as T
@@ -54,4 +54,4 @@ instance (KnownSymbol sessionKey, KnownSymbol password) => Arbitrary (LeakingMoc
         ]
     return $
       LeakingMockEnv $
-        MockEnv {..}
+        MockEnv{..}

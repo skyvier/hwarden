@@ -8,37 +8,39 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
-import Hwarden.Agent (Password (..), SessionKey, Username (..))
-import Hwarden.Agent
-  ( handleConnectionExceptionBoundary,
-    handleRefreshIterationExceptionBoundary
-  )
+import Hwarden.Agent (
+  Password (..),
+  SessionKey,
+  Username (..),
+  handleConnectionExceptionBoundary,
+  handleRefreshIterationExceptionBoundary,
+ )
 import Hwarden.App (AgentT, Env (..), runAgentT)
 import Hwarden.Bitwarden (Bitwarden (unlock))
 import qualified Hwarden.Bitwarden as Bitwarden
-import Katip
-  ( ColorStrategy (ColorIfTerminal),
-    LogEnv,
-    Severity (..),
-    Verbosity (V2),
-    closeScribes,
-    defaultScribeSettings,
-    initLogEnv,
-    mkHandleScribe,
-    permitItem,
-    registerScribe
-  )
-import System.Directory
-  ( getTemporaryDirectory,
-    removeFile
-  )
+import Katip (
+  ColorStrategy (ColorIfTerminal),
+  LogEnv,
+  Severity (..),
+  Verbosity (V2),
+  closeScribes,
+  defaultScribeSettings,
+  initLogEnv,
+  mkHandleScribe,
+  permitItem,
+  registerScribe,
+ )
+import System.Directory (
+  getTemporaryDirectory,
+  removeFile,
+ )
 import System.FilePath ((</>))
-import System.IO
-  ( Handle,
-    hClose,
-    hFlush,
-    openBinaryTempFile,
-  )
+import System.IO (
+  Handle,
+  hClose,
+  hFlush,
+  openBinaryTempFile,
+ )
 import System.Posix.Files (setFileMode)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase)
@@ -158,13 +160,13 @@ withCapturedAgentLogs action = do
   logEnv <- initCapturedLogEnv logHandle
   let env =
         Env
-          { envLogEnv = logEnv,
-            envLogContexts = mempty,
-            envNamespace = "hwarden-agent-test",
-            envBitwardenCliPath = "/bin/false",
-            envBitwardenCliAppDataDir = tempDir,
-            envBitwardenServerUrl = Bitwarden.defaultBitwardenServerUrl,
-            envCacheRefreshIntervalSeconds = 60
+          { envLogEnv = logEnv
+          , envLogContexts = mempty
+          , envNamespace = "hwarden-agent-test"
+          , envBitwardenCliPath = "/bin/false"
+          , envBitwardenCliAppDataDir = tempDir
+          , envBitwardenServerUrl = Bitwarden.defaultBitwardenServerUrl
+          , envCacheRefreshIntervalSeconds = 60
           }
   action env
   _ <- closeScribes logEnv
@@ -187,7 +189,7 @@ withSleepingBwEnv action = do
   BS.writeFile bwPath "#!/bin/sh\nsleep 5\n"
   setFileMode bwPath 0o700
   withCapturedAgentLogs $ \env ->
-    action env {envBitwardenCliPath = bwPath}
+    action env{envBitwardenCliPath = bwPath}
 
 forkDelayedThreadKilled :: ThreadId -> IO ThreadId
 forkDelayedThreadKilled targetThread =

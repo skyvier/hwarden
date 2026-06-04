@@ -3,68 +3,68 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Hwarden.App
-  ( AgentT (..),
-    Env (..),
-    initAgentEnv,
-    parseBitwardenCliPath,
-    runAgentT,
-    validateBitwardenCliPath,
-  )
+module Hwarden.App (
+  AgentT (..),
+  Env (..),
+  initAgentEnv,
+  parseBitwardenCliPath,
+  runAgentT,
+  validateBitwardenCliPath,
+)
 where
 
-import Control.Monad.Time (MonadTime)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, ReaderT, asks, local, runReaderT)
+import Control.Monad.Time (MonadTime)
+import qualified Control.Monad.Time as MonadTime
 import Data.Text (Text)
 import Hwarden.Bitwarden (Bitwarden, determineBitwardenServerUrl)
-import Hwarden.Bitwarden.Real
-  ( HasBitwardenCliConfig (..),
-    RealBitwardenT (..)
-  )
-import Hwarden.Logging
-  ( MonadLog (..),
-    renderLogMessage
-  )
+import Hwarden.Bitwarden.Real (
+  HasBitwardenCliConfig (..),
+  RealBitwardenT (..),
+ )
+import Hwarden.Logging (
+  MonadLog (..),
+  renderLogMessage,
+ )
 import qualified Hwarden.Runtime as Runtime
-import Katip
-  ( ColorStrategy (ColorIfTerminal),
-    Katip,
-    KatipContext,
-    LogEnv,
-    LogContexts,
-    Namespace,
-    Severity (..),
-    Verbosity (V2),
-    defaultScribeSettings,
-    getKatipContext,
-    getKatipNamespace,
-    getLogEnv,
-    initLogEnv,
-    localKatipContext,
-    localKatipNamespace,
-    localLogEnv,
-    logStr,
-    logTM,
-    mkHandleScribe,
-    permitItem,
-    registerScribe
-  )
+import Katip (
+  ColorStrategy (ColorIfTerminal),
+  Katip,
+  KatipContext,
+  LogContexts,
+  LogEnv,
+  Namespace,
+  Severity (..),
+  Verbosity (V2),
+  defaultScribeSettings,
+  getKatipContext,
+  getKatipNamespace,
+  getLogEnv,
+  initLogEnv,
+  localKatipContext,
+  localKatipNamespace,
+  localLogEnv,
+  logStr,
+  logTM,
+  mkHandleScribe,
+  permitItem,
+  registerScribe,
+ )
 import System.Directory (doesFileExist, executable, getPermissions)
 import System.Environment (lookupEnv)
 import System.IO (stdout)
 import Text.Read (readMaybe)
-import qualified Control.Monad.Time as MonadTime
 import UnliftIO (MonadUnliftIO)
 
 data Env = Env
-  { envLogEnv :: LogEnv,
-    envLogContexts :: LogContexts,
-    envNamespace :: Namespace,
-    envBitwardenCliPath :: FilePath,
-    envBitwardenCliAppDataDir :: FilePath,
-    envBitwardenServerUrl :: Text,
-    envCacheRefreshIntervalSeconds :: Int
+  { envLogEnv :: LogEnv
+  , envLogContexts :: LogContexts
+  , envNamespace :: Namespace
+  , envBitwardenCliPath :: FilePath
+  , envBitwardenCliAppDataDir :: FilePath
+  , envBitwardenServerUrl :: Text
+  , envCacheRefreshIntervalSeconds :: Int
   }
 
 newtype AgentT a = AgentT
@@ -76,18 +76,18 @@ newtype AgentT a = AgentT
 instance Katip AgentT where
   getLogEnv = asks envLogEnv
   localLogEnv f = AgentT . local updateLogEnv . runAgentTInternal
-    where
-      updateLogEnv env = env {envLogEnv = f (envLogEnv env)}
+   where
+    updateLogEnv env = env{envLogEnv = f (envLogEnv env)}
 
 instance KatipContext AgentT where
   getKatipContext = asks envLogContexts
   localKatipContext f = AgentT . local updateLogContexts . runAgentTInternal
-    where
-      updateLogContexts env = env {envLogContexts = f (envLogContexts env)}
+   where
+    updateLogContexts env = env{envLogContexts = f (envLogContexts env)}
   getKatipNamespace = asks envNamespace
   localKatipNamespace f = AgentT . local updateNamespace . runAgentTInternal
-    where
-      updateNamespace env = env {envNamespace = f (envNamespace env)}
+   where
+    updateNamespace env = env{envNamespace = f (envNamespace env)}
 
 instance MonadTime AgentT where
   currentTime = liftIO MonadTime.currentTime

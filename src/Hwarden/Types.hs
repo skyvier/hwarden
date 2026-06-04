@@ -3,14 +3,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Hwarden.Types
-  ( LoginItemId (..),
-    ItemSummary (..),
-    Password (..),
-    PasswordValue (..),
-    SessionKey (..),
-    Username (..)
-  )
+module Hwarden.Types (
+  LoginItemId (..),
+  ItemSummary (..),
+  Password (..),
+  PasswordValue (..),
+  SessionKey (..),
+  Username (..),
+)
 where
 
 import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), object, withObject, (.:), (.=))
@@ -22,7 +22,7 @@ import Test.QuickCheck (elements, listOf1)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
 
-newtype LoginItemId = LoginItemId { unLoginItemId :: Text }
+newtype LoginItemId = LoginItemId {unLoginItemId :: Text}
   deriving (Eq, Show, Generic)
 
 instance Arbitrary LoginItemId where
@@ -33,18 +33,18 @@ instance ToLog LoginItemId where
   toLogText = unLoginItemId
 
 data ItemSummary = ItemSummary
-  { itemId :: Text,
-    itemName :: Text,
-    itemUsername :: Text
+  { itemId :: Text
+  , itemName :: Text
+  , itemUsername :: Text
   }
   deriving (Eq, Show, Generic)
 
 instance ToJSON ItemSummary where
   toJSON (ItemSummary summaryId summaryName summaryUsername) =
     object
-      [ "id" .= summaryId,
-        "name" .= summaryName,
-        "username" .= summaryUsername
+      [ "id" .= summaryId
+      , "name" .= summaryName
+      , "username" .= summaryUsername
       ]
 
 instance FromJSON ItemSummary where
@@ -75,7 +75,7 @@ instance Arbitrary SessionKey where
     SessionKey . wrapNeedle
       <$> shrinkNeedlePayload sessionNeedlePrefix sessionNeedleSuffix value
 
-newtype Username = Username { unUsername :: Text }
+newtype Username = Username {unUsername :: Text}
   deriving (Eq, Show, Generic)
 
 instance Arbitrary Username where

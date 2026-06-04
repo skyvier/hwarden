@@ -14,20 +14,21 @@ import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
 import Hwarden.Sanitize (sanitizeGetPasswordFailure)
 
-
 tests :: TestTree
-tests = testGroup "get-password"
-  [ testProperty "given any initial state, get-password preserves state regardless of the backend result" $
-      propertyHandleRequestWithGetPasswordPreservesState
-  , testProperty "given a locked state, a get-password response indicates that it failed due to locked state" $
-      propertyHandleRequestWithGetPasswordLocked
-  , testProperty "given an unlocked state, a successful get-password response returns the password as is" $
-      propertyHandleRequestWithGetPasswordSuccess
-  , testProperty "given an unlocked state, an unavailable get-password backend returns a generic failure" $
-      propertyHandleRequestWithGetPasswordUnavailable
-  , testProperty "given an unlocked state, a failed get-password backend returns a sanitized failure" $
-      propertyHandleRequestWithGetPasswordFailed
-  ]
+tests =
+  testGroup
+    "get-password"
+    [ testProperty "given any initial state, get-password preserves state regardless of the backend result" $
+        propertyHandleRequestWithGetPasswordPreservesState
+    , testProperty "given a locked state, a get-password response indicates that it failed due to locked state" $
+        propertyHandleRequestWithGetPasswordLocked
+    , testProperty "given an unlocked state, a successful get-password response returns the password as is" $
+        propertyHandleRequestWithGetPasswordSuccess
+    , testProperty "given an unlocked state, an unavailable get-password backend returns a generic failure" $
+        propertyHandleRequestWithGetPasswordUnavailable
+    , testProperty "given an unlocked state, a failed get-password backend returns a sanitized failure" $
+        propertyHandleRequestWithGetPasswordFailed
+    ]
 
 propertyHandleRequestWithGetPasswordPreservesState ::
   Agent.AgentState ->
@@ -40,7 +41,6 @@ propertyHandleRequestWithGetPasswordPreservesState initialState loginItemId mock
           (defaultMockEnv & withGetPasswordResult mockGetPasswordResult)
           (Agent.handleRequestWith (Agent.GetPasswordRequest loginItemId) initialState)
    in property (newState == initialState && effects == [])
-
 
 propertyHandleRequestWithGetPasswordLocked :: Agent.LoginItemId -> Property
 propertyHandleRequestWithGetPasswordLocked loginItemId =

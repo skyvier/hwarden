@@ -1,16 +1,16 @@
-module Hwarden.Runtime
-  ( AgentPaths (..),
-    deriveAgentPaths,
-  )
+module Hwarden.Runtime (
+  AgentPaths (..),
+  deriveAgentPaths,
+)
 where
 
 import System.FilePath ((</>))
 
 data AgentPaths = AgentPaths
-  { runtimeDir :: FilePath,
-    socketDir :: FilePath,
-    socketPath :: FilePath,
-    bitwardenCliAppDataDir :: FilePath
+  { runtimeDir :: FilePath
+  , socketDir :: FilePath
+  , socketPath :: FilePath
+  , bitwardenCliAppDataDir :: FilePath
   }
   deriving (Eq, Show)
 
@@ -21,14 +21,14 @@ deriveAgentPaths baseRuntimeDir =
     else
       Right
         AgentPaths
-          { runtimeDir = baseRuntimeDir,
-            socketDir = hwardenRuntimeDir,
-            socketPath = agentSocketPath,
-            bitwardenCliAppDataDir = hwardenRuntimeDir </> "bitwarden-cli"
+          { runtimeDir = baseRuntimeDir
+          , socketDir = hwardenRuntimeDir
+          , socketPath = agentSocketPath
+          , bitwardenCliAppDataDir = hwardenRuntimeDir </> "bitwarden-cli"
           }
-  where
-    hwardenRuntimeDir = baseRuntimeDir </> "hwarden"
-    agentSocketPath = hwardenRuntimeDir </> "agent.sock"
+ where
+  hwardenRuntimeDir = baseRuntimeDir </> "hwarden"
+  agentSocketPath = hwardenRuntimeDir </> "agent.sock"
 
 maxUnixSocketPathLength :: Int
 maxUnixSocketPathLength = 107

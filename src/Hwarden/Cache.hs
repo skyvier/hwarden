@@ -2,26 +2,25 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Hwarden.Cache
-  ( CacheAgeSeconds (..),
-    CacheFillFailure (..),
-    CacheEntry (..),
-    ItemCacheState (..),
-    LatestRefreshStatus (..),
-    cacheAgeSeconds,
-    initialItemCacheState,
-    updateItemCacheState,
-    cacheFillFailureFromListItemsError,
-    syncErrorToCacheFillFailure,
-    buildInitialCacheState,
-    refreshCacheEntry,
-  )
+module Hwarden.Cache (
+  CacheAgeSeconds (..),
+  CacheFillFailure (..),
+  CacheEntry (..),
+  ItemCacheState (..),
+  LatestRefreshStatus (..),
+  cacheAgeSeconds,
+  initialItemCacheState,
+  updateItemCacheState,
+  cacheFillFailureFromListItemsError,
+  syncErrorToCacheFillFailure,
+  buildInitialCacheState,
+  refreshCacheEntry,
+)
 where
 
 import Data.Bifunctor (first)
 import Data.Text (Text)
-import Data.Time.Clock (UTCTime)
-import Data.Time.Clock (diffUTCTime)
+import Data.Time.Clock (UTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 
 import Control.Monad.Except (ExceptT (..), runExceptT)
@@ -33,18 +32,18 @@ import Test.QuickCheck (Gen, oneof)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Time ()
 
-import Hwarden.Bitwarden
-  ( Bitwarden (listItems, sync),
-    ListItemsError (..),
-    SyncError (..)
-  )
+import Hwarden.Bitwarden (
+  Bitwarden (listItems, sync),
+  ListItemsError (..),
+  SyncError (..),
+ )
 import Hwarden.Response (CacheAgeSeconds (..))
-import Hwarden.Sanitize
-  ( SanitizedText,
-    Secret (SessionSecret),
-    sanitizeListItemsFailure,
-    sanitizeSyncFailure
-  )
+import Hwarden.Sanitize (
+  SanitizedText,
+  Secret (SessionSecret),
+  sanitizeListItemsFailure,
+  sanitizeSyncFailure,
+ )
 import Hwarden.Types (ItemSummary, SessionKey (..))
 
 data LatestRefreshStatus
@@ -60,22 +59,22 @@ data CacheFillFailure
 instance Arbitrary CacheFillFailure where
   arbitrary =
     oneof
-      [ pure CacheFillUnavailable,
-        CacheFillFailed <$> arbitrary
+      [ pure CacheFillUnavailable
+      , CacheFillFailed <$> arbitrary
       ]
   shrink = genericShrink
 
 instance Arbitrary LatestRefreshStatus where
   arbitrary =
     oneof
-      [ pure LatestRefreshSucceeded,
-        LatestRefreshFailed <$> arbitrary
+      [ pure LatestRefreshSucceeded
+      , LatestRefreshFailed <$> arbitrary
       ]
   shrink = genericShrink
 
 data CacheEntry = CacheEntry
-  { cacheEntryItems :: [ItemSummary],
-    cacheEntryRefreshedAt :: UTCTime
+  { cacheEntryItems :: [ItemSummary]
+  , cacheEntryRefreshedAt :: UTCTime
   }
   deriving (Eq, Show, Generic)
 
@@ -93,9 +92,9 @@ data ItemCacheState
 instance Arbitrary ItemCacheState where
   arbitrary =
     oneof
-      [ pure CacheNotYetFilled,
-        CacheFillError <$> arbitrary,
-        CacheReady <$> arbitrary <*> arbitrary
+      [ pure CacheNotYetFilled
+      , CacheFillError <$> arbitrary
+      , CacheReady <$> arbitrary <*> arbitrary
       ]
   shrink = genericShrink
 

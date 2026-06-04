@@ -3,153 +3,154 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-module Hwarden.Agent
-  ( Bitwarden (..),
-    AgentState (..),
-    FailureMessage (..),
-    CacheAgeSeconds (..),
-    CacheFillFailure (..),
-    CacheEntry (..),
-    ItemCacheState (..),
-    LatestRefreshStatus (..),
-    Effect (..),
-    Decision (..),
-    GetPasswordError (..),
-    ItemSummary (..),
-    ListItemsError (..),
-    LoginItemId (..),
-    Password (..),
-    PasswordValue (..),
-    Request (..),
-    Command (..),
-    fromCommandIdentifier,
-    toCommandIdentifier,
-    Response,
-    SessionKey (..),
-    UnlockError (..),
-    Username (..),
-    cleanupSocket,
-    decide,
-    handleGetPassword,
-    handleConnectionExceptionBoundary,
-    handleListItems,
-    handleRefreshIterationExceptionBoundary,
-    handleRefreshResult,
-    handleUnlock,
-    handleRequest,
-    handleRequestWith,
-    failureResponse,
-    itemListResponse,
-    passwordResultResponse,
-    prepareRuntimeDir,
-    removeExistingSocket,
-    responseErrorText,
-    responseIsFailure,
-    responseItems,
-    responsePasswordResult,
-    runAgent,
-    sanitizeUnlockError,
-    successResponse
-  )
+
+module Hwarden.Agent (
+  Bitwarden (..),
+  AgentState (..),
+  FailureMessage (..),
+  CacheAgeSeconds (..),
+  CacheFillFailure (..),
+  CacheEntry (..),
+  ItemCacheState (..),
+  LatestRefreshStatus (..),
+  Effect (..),
+  Decision (..),
+  GetPasswordError (..),
+  ItemSummary (..),
+  ListItemsError (..),
+  LoginItemId (..),
+  Password (..),
+  PasswordValue (..),
+  Request (..),
+  Command (..),
+  fromCommandIdentifier,
+  toCommandIdentifier,
+  Response,
+  SessionKey (..),
+  UnlockError (..),
+  Username (..),
+  cleanupSocket,
+  decide,
+  handleGetPassword,
+  handleConnectionExceptionBoundary,
+  handleListItems,
+  handleRefreshIterationExceptionBoundary,
+  handleRefreshResult,
+  handleUnlock,
+  handleRequest,
+  handleRequestWith,
+  failureResponse,
+  itemListResponse,
+  passwordResultResponse,
+  prepareRuntimeDir,
+  removeExistingSocket,
+  responseErrorText,
+  responseIsFailure,
+  responseItems,
+  responsePasswordResult,
+  runAgent,
+  sanitizeUnlockError,
+  successResponse,
+)
 where
 
-import UnliftIO.MVar (MVar, modifyMVar, newMVar)
-import qualified UnliftIO.Exception as Exception
-import Control.Monad.Time (MonadTime, currentTime)
 import Control.Exception (finally)
-import Control.Monad.IO.Class (liftIO)
 import Control.Monad (forever, void, when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
-import Data.Aeson
-  ( FromJSON (parseJSON),
-    ToJSON (toJSON),
-    eitherDecodeStrict',
-    object,
-    withObject,
-    (.:),
-    (.=)
-  )
+import Control.Monad.Time (MonadTime, currentTime)
+import Data.Aeson (
+  FromJSON (parseJSON),
+  ToJSON (toJSON),
+  eitherDecodeStrict',
+  object,
+  withObject,
+  (.:),
+  (.=),
+ )
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.UUID as UUID
+import Data.UUID.V4 (nextRandom)
 import GHC.Generics (Generic)
-import Hwarden.Bitwarden
-  ( Bitwarden (getPassword, unlock),
-    GetPasswordError (..),
-    ListItemsError (..),
-    UnlockError (..),
-  )
+import Hwarden.App (AgentT, Env (..), initAgentEnv, runAgentT)
+import Hwarden.Bitwarden (
+  Bitwarden (getPassword, unlock),
+  GetPasswordError (..),
+  ListItemsError (..),
+  UnlockError (..),
+ )
 import Hwarden.Bitwarden.Real (configureServer)
-import Hwarden.Cache
-  ( CacheAgeSeconds (..),
-    CacheEntry (..),
-    CacheFillFailure (..),
-    ItemCacheState (..),
-    LatestRefreshStatus (..),
-    buildInitialCacheState,
-    cacheAgeSeconds,
-    refreshCacheEntry,
-    updateItemCacheState
-  )
-import Hwarden.Logging (MonadLog, logInfoF, logInfoS, ToLog (..))
-import Hwarden.Response
-  ( FailureMessage (..),
-    Response,
-    failureResponse,
-    itemListResponse,
-    passwordResultResponse,
-    responseErrorText,
-    responseIsFailure,
-    responseItems,
-    responsePasswordResult,
-    successResponse
-  )
+import Hwarden.Cache (
+  CacheAgeSeconds (..),
+  CacheEntry (..),
+  CacheFillFailure (..),
+  ItemCacheState (..),
+  LatestRefreshStatus (..),
+  buildInitialCacheState,
+  cacheAgeSeconds,
+  refreshCacheEntry,
+  updateItemCacheState,
+ )
+import Hwarden.Logging (MonadLog, ToLog (..), logInfoF, logInfoS)
+import Hwarden.Response (
+  FailureMessage (..),
+  Response,
+  failureResponse,
+  itemListResponse,
+  passwordResultResponse,
+  responseErrorText,
+  responseIsFailure,
+  responseItems,
+  responsePasswordResult,
+  successResponse,
+ )
 import qualified Hwarden.Runtime as Runtime
+import Hwarden.Sanitize (
+  sanitizeGetPasswordFailure,
+  sanitizeUnlockError,
+  trustStaticText,
+ )
 import Hwarden.Socket (recvAll)
 import Hwarden.Types (ItemSummary (..), LoginItemId (..), Password (..), PasswordValue (..), SessionKey (..), Username (..))
-import Hwarden.App (AgentT, runAgentT, Env(..), initAgentEnv)
-import Katip
-  ( KatipContext,
-    Namespace,
-    closeScribes,
-    katipAddContext,
-    katipAddNamespace,
-    sl
-  )
-import Network.Socket
-  ( Family (AF_UNIX),
-    SockAddr (SockAddrUnix),
-    Socket,
-    SocketType (Stream),
-    accept,
-    bind,
-    close,
-    defaultProtocol,
-    listen,
-    maxListenQueue,
-    socket
-  )
+import Katip (
+  KatipContext,
+  Namespace,
+  closeScribes,
+  katipAddContext,
+  katipAddNamespace,
+  sl,
+ )
+import Network.Socket (
+  Family (AF_UNIX),
+  SockAddr (SockAddrUnix),
+  Socket,
+  SocketType (Stream),
+  accept,
+  bind,
+  close,
+  defaultProtocol,
+  listen,
+  maxListenQueue,
+  socket,
+ )
 import qualified Network.Socket.ByteString as NBS
-import System.Directory
-  ( createDirectoryIfMissing,
-    doesPathExist,
-    removePathForcibly
-  )
+import System.Directory (
+  createDirectoryIfMissing,
+  doesPathExist,
+  removePathForcibly,
+ )
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.Posix.Files (ownerModes, setFileMode)
 import Test.QuickCheck (elements, oneof)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
-import qualified Data.UUID as UUID
-import Data.UUID.V4 (nextRandom)
 import qualified UnliftIO.Concurrent as Concurrent
-import Hwarden.Sanitize
-  ( sanitizeGetPasswordFailure,
-    sanitizeUnlockError,
-    trustStaticText
-  )
+import qualified UnliftIO.Exception as Exception
+import UnliftIO.MVar (MVar, modifyMVar, newMVar)
 
 data Request
   = UnlockRequest Username Password
@@ -160,45 +161,44 @@ data Request
   deriving (Eq, Generic)
 
 instance Show Request where
-  show (UnlockRequest username _) = 
+  show (UnlockRequest username _) =
     "unlock (" <> show username <> ")"
   show Status = "status"
   show ListItems = "list-items"
-  show (GetPasswordRequest loginItemId) = 
+  show (GetPasswordRequest loginItemId) =
     "get-password (" <> show loginItemId <> ")"
   show UnknownRequest = "unknown-request"
 
-instance ToLog Request where 
+instance ToLog Request where
   toLogText (UnlockRequest username _) =
     "unlock (" <> toLogText username <> ")"
   toLogText Status = "status"
   toLogText ListItems = "list-items"
-  toLogText (GetPasswordRequest loginItemId) = 
+  toLogText (GetPasswordRequest loginItemId) =
     "get-password (" <> toLogText loginItemId <> ")"
   toLogText UnknownRequest = "unknown-request"
-
 
 instance FromJSON Request where
   parseJSON = withObject "Request" $ \obj -> do
     cmd <- obj .: "cmd"
     case fromCommandIdentifier (cmd :: Text) of
-      Just UnlockCommand -> 
+      Just UnlockCommand ->
         UnlockRequest <$> (Username <$> obj .: "email") <*> (Password <$> obj .: "password")
-      Just StatusCommand -> 
+      Just StatusCommand ->
         pure Status
-      Just ListItemsCommand -> 
+      Just ListItemsCommand ->
         pure ListItems
-      Just GetPasswordCommand -> 
+      Just GetPasswordCommand ->
         GetPasswordRequest . LoginItemId <$> obj .: "id"
-      Nothing -> 
+      Nothing ->
         pure UnknownRequest
 
 instance ToJSON Request where
   toJSON (UnlockRequest (Username email) (Password password)) =
     object
-      [ "cmd" .= toCommandIdentifier UnlockCommand,
-        "email" .= email,
-        "password" .= password
+      [ "cmd" .= toCommandIdentifier UnlockCommand
+      , "email" .= email
+      , "password" .= password
       ]
   toJSON Status =
     object
@@ -206,12 +206,12 @@ instance ToJSON Request where
       ]
   toJSON ListItems =
     object
-      [ "cmd" .= toCommandIdentifier ListItemsCommand 
+      [ "cmd" .= toCommandIdentifier ListItemsCommand
       ]
   toJSON (GetPasswordRequest (LoginItemId passwordItemId)) =
     object
-      [ "cmd" .= toCommandIdentifier GetPasswordCommand,
-        "id" .= passwordItemId
+      [ "cmd" .= toCommandIdentifier GetPasswordCommand
+      , "id" .= passwordItemId
       ]
   toJSON UnknownRequest =
     object
@@ -221,23 +221,23 @@ instance ToJSON Request where
 instance Arbitrary Request where
   arbitrary =
     oneof
-      [ UnlockRequest <$> arbitrary <*> arbitrary,
-        pure Status,
-        pure ListItems,
-        GetPasswordRequest <$> arbitrary,
-        pure UnknownRequest
+      [ UnlockRequest <$> arbitrary <*> arbitrary
+      , pure Status
+      , pure ListItems
+      , GetPasswordRequest <$> arbitrary
+      , pure UnknownRequest
       ]
   shrink = genericShrink
 
-data Command 
+data Command
   = UnlockCommand
   | StatusCommand
   | ListItemsCommand
-  | GetPasswordCommand 
+  | GetPasswordCommand
   deriving (Eq, Show, Enum, Bounded)
 
 instance Arbitrary Command where
-  arbitrary = elements [minBound..maxBound]
+  arbitrary = elements [minBound .. maxBound]
   shrink _ = []
 
 toCommandIdentifier :: Command -> Text
@@ -280,12 +280,13 @@ runAgent = do
   agentStateVar <- newMVar Locked
   sock <- socket AF_UNIX Stream defaultProtocol
   finally
-    (do
+    ( do
         bind sock (SockAddrUnix (Runtime.socketPath paths))
         listen sock maxListenQueue
         forever $ do
           (conn, _) <- accept sock
-          handleConnection env agentStateVar conn)
+          handleConnection env agentStateVar conn
+    )
     (close sock `finally` (cleanupSocket (Runtime.socketPath paths) `finally` closeScribes (envLogEnv env)))
 
 requireRuntimeDir :: IO FilePath
@@ -318,22 +319,23 @@ bootstrapBitwardenCli env = do
 handleConnection :: Env -> MVar AgentState -> Socket -> IO ()
 handleConnection agentEnv agentStateVar conn =
   finally
-    (runAgentT agentEnv $
+    ( runAgentT agentEnv $
         handleConnectionExceptionBoundary $
-        katipAddNamespace socketNamespace $ do
-        traceId <- liftIO generateTraceId
-        katipAddContext (sl "trace_id" traceId) $ do
-          raw <- liftIO (recvAll conn)
-          response <-
-            case eitherDecodeStrict' raw of
-              Left err -> do
-                logRequestDecodeFailure err
-                pure (failureResponse (StaticFailure (trustStaticText (T.pack err))))
-              Right request -> do
-                logRequestReceived request
-                handleRequest agentStateVar request
-          liftIO (NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
-          logResponseSent response)
+          katipAddNamespace socketNamespace $ do
+            traceId <- liftIO generateTraceId
+            katipAddContext (sl "trace_id" traceId) $ do
+              raw <- liftIO (recvAll conn)
+              response <-
+                case eitherDecodeStrict' raw of
+                  Left err -> do
+                    logRequestDecodeFailure err
+                    pure (failureResponse (StaticFailure (trustStaticText (T.pack err))))
+                  Right request -> do
+                    logRequestReceived request
+                    handleRequest agentStateVar request
+              liftIO (NBS.sendAll conn (LBS.toStrict (Aeson.encode response)))
+              logResponseSent response
+    )
     (close conn)
 
 handleConnectionExceptionBoundary :: AgentT () -> AgentT ()
@@ -349,7 +351,6 @@ handleRequest agentStateVar request = do
       pure (newState, (response, effects))
   mapM_ (runEffect agentStateVar) effects
   pure response
-
 
 handleRequestWith :: (Bitwarden m, MonadTime m) => Request -> AgentState -> m (AgentState, Response, [Effect])
 handleRequestWith request agentState =
@@ -367,10 +368,10 @@ data Effect
   deriving (Eq, Show)
 
 instance ToLog Effect where
-  toLogText (StartCacheRefreshLoop _) = 
+  toLogText (StartCacheRefreshLoop _) =
     "start-cache-refresh-loop"
 
-data Decision 
+data Decision
   = UnlockAction Username Password
   | ListItemsAction CacheEntry
   | GetPasswordAction SessionKey LoginItemId
@@ -410,12 +411,12 @@ handleUnlock email password = do
     Right sessionKey -> do
       cacheState <- buildInitialCacheState sessionKey
       pure
-        ( Unlocked sessionKey cacheState,
-          successResponse "unlocked",
-          [StartCacheRefreshLoop sessionKey]
+        ( Unlocked sessionKey cacheState
+        , successResponse "unlocked"
+        , [StartCacheRefreshLoop sessionKey]
         )
 
-handleListItems :: MonadTime m => CacheEntry -> AgentState -> m (AgentState, Response, [Effect])
+handleListItems :: (MonadTime m) => CacheEntry -> AgentState -> m (AgentState, Response, [Effect])
 handleListItems cacheEntry agentState = do
   now <- currentTime
   pure (agentState, itemListResponse (cacheEntryItems cacheEntry) (cacheAgeSeconds now cacheEntry), [])
@@ -434,20 +435,20 @@ startRefreshLoop agentStateVar sessionKey = do
     logInfoS @"starting item cache refresh loop" @AgentT
     void $
       Concurrent.forkIO (refreshLoop refreshIntervalMicroseconds)
-  where
-    refreshLoop refreshIntervalMicroseconds = do
-      Concurrent.threadDelay refreshIntervalMicroseconds
-      shouldContinue <-
-        handleRefreshIterationExceptionBoundary $ do
-          logInfoS @"running item cache refresh" @AgentT
-          refreshResult <- refreshCacheEntry sessionKey
-          shouldContinue <-
-            modifyMVar agentStateVar $
-              \agentState -> pure $ handleRefreshResult sessionKey refreshResult agentState
-          logRefreshResult refreshResult shouldContinue
-          pure shouldContinue
-      when shouldContinue $
-        refreshLoop refreshIntervalMicroseconds
+ where
+  refreshLoop refreshIntervalMicroseconds = do
+    Concurrent.threadDelay refreshIntervalMicroseconds
+    shouldContinue <-
+      handleRefreshIterationExceptionBoundary $ do
+        logInfoS @"running item cache refresh" @AgentT
+        refreshResult <- refreshCacheEntry sessionKey
+        shouldContinue <-
+          modifyMVar agentStateVar $
+            \agentState -> pure $ handleRefreshResult sessionKey refreshResult agentState
+        logRefreshResult refreshResult shouldContinue
+        pure shouldContinue
+    when shouldContinue $
+      refreshLoop refreshIntervalMicroseconds
 
 handleRefreshIterationExceptionBoundary :: AgentT Bool -> AgentT Bool
 handleRefreshIterationExceptionBoundary action =
@@ -459,8 +460,8 @@ handleRefreshResult :: SessionKey -> Either CacheFillFailure CacheEntry -> Agent
 handleRefreshResult sessionKey refreshResult agentState =
   case classifyRefreshOwnership sessionKey agentState of
     RefreshWorkerOwnsSession currentSessionKey itemCacheState ->
-      ( Unlocked currentSessionKey (updateItemCacheState itemCacheState refreshResult),
-        True
+      ( Unlocked currentSessionKey (updateItemCacheState itemCacheState refreshResult)
+      , True
       )
     RefreshWorkerNoLongerOwnsSession ->
       (agentState, False)
@@ -477,7 +478,7 @@ classifyRefreshOwnership sessionKey agentState =
           RefreshWorkerOwnsSession currentSessionKey itemCacheState
     _ -> RefreshWorkerNoLongerOwnsSession
 
-handleGetPassword :: Bitwarden m => SessionKey -> LoginItemId -> AgentState -> m (AgentState, Response, [Effect])
+handleGetPassword :: (Bitwarden m) => SessionKey -> LoginItemId -> AgentState -> m (AgentState, Response, [Effect])
 handleGetPassword sessionKey loginItemId agentState = do
   result <- getPassword sessionKey loginItemId
   let response =
@@ -498,7 +499,7 @@ getPasswordFailureResponse :: SessionKey -> Text -> Response
 getPasswordFailureResponse sessionKey err =
   failureResponse (SessionSanitizedFailure (sanitizeGetPasswordFailure sessionKey err))
 
-logRefreshResult :: forall m. MonadLog m => Either CacheFillFailure CacheEntry -> Bool -> m ()
+logRefreshResult :: forall m. (MonadLog m) => Either CacheFillFailure CacheEntry -> Bool -> m ()
 logRefreshResult refreshResult shouldContinue =
   case (refreshResult, shouldContinue) of
     (Right _, True) ->

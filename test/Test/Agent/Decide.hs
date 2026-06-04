@@ -9,7 +9,7 @@ import Test.Tasty.QuickCheck
 import qualified Hwarden.Agent as Agent
 
 tests :: TestTree
-tests = 
+tests =
   testGroup
     "decide"
     [ testCase "given a locked state, an unlock request triggers an unlock decision" $
