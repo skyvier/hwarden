@@ -19,8 +19,12 @@ package_path=$(
         let
           lockedNixpkgs = import ./nix/nixpkgs-from-flake-lock.nix {};
           pkgs = lockedNixpkgs.pkgs;
+          hpkgs = import ./nix/haskell-packages.nix { inherit pkgs; };
         in
-          pkgs.callPackage ./nix/package.nix { inherit sourceRevision; }'
+          pkgs.callPackage ./nix/package.nix { 
+            inherit sourceRevision; 
+            haskellPackages = hpkgs;
+          }'
 )
 
 nix-store --query --requisites "$package_path" \
