@@ -1,33 +1,31 @@
 let
-  pkgs = import <nixpkgs> {};
-  lib = pkgs.lib;
-  module = import ../../nix/module.nix;
-  evaluated = lib.evalModules {
-  modules = [
-    {
-      config._module.args.pkgs = pkgs;
-      options.systemd.user.services = lib.mkOption {
-        type = lib.types.attrsOf lib.types.anything;
-        default = {};
+  evaluated = import <nixpkgs/nixos> {
+    configuration = {
+      imports = [ ../../nix/module.nix ];
+
+      boot.loader.grub.enable = false;
+      fileSystems."/" = {
+        device = "test";
+        fsType = "ext4";
       };
-    }
-    module
-    {
+      system.stateVersion = "25.05";
+
       services.hwarden-agent = {
         enable = true;
         serverUrl = "https://vault.bitwarden.com";
         cacheRefreshIntervalSeconds = 30;
       };
-    }
-  ];
+    };
   };
 
+  pkgs = evaluated.pkgs;
+  lib = pkgs.lib;
   service = evaluated.config.systemd.user.services.hwarden-agent;
-  env = service.Service.Environment;
 in
 assert !(lib.hasAttrByPath [ "services" "hwarden-agent" "bitwardenCliPackage" ] evaluated.options);
-assert !(lib.any (lib.hasPrefix "HWARDEN_BW_PATH=") env);
-assert lib.elem "HWARDEN_SERVER_URL=https://vault.bitwarden.com" env;
-assert lib.elem "HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS=30" env;
-assert service.Install.WantedBy == [ "default.target" ];
+assert !(lib.hasAttr "HWARDEN_BW_PATH" service.environment);
+assert service.environment.HWARDEN_SERVER_URL == "https://vault.bitwarden.com";
+assert service.environment.HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS == "30";
+assert lib.hasSuffix "/bin/hwarden-agent" service.serviceConfig.ExecStart;
+assert service.wantedBy == [ "default.target" ];
 true

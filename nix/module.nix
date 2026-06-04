@@ -69,14 +69,13 @@ in
 
   config = lib.mkIf cfg.enable {
     systemd.user.services.hwarden-agent = {
-      Unit = {
-        Description = "hwarden-agent Bitwarden session daemon";
-        Documentation = [ "https://github.com/skyvier/hwarden-agent" ];
-      };
+      description = "hwarden-agent Bitwarden session daemon";
+      documentation = [ "https://github.com/skyvier/hwarden-agent" ];
+      wantedBy = [ "default.target" ];
+      environment = environment;
 
-      Service = {
+      serviceConfig = {
         ExecStart = "${cfg.package}/bin/hwarden-agent";
-        Environment = lib.mapAttrsToList (name: value: "${name}=${value}") environment;
         Restart = "on-failure";
         RestartSec = "5s";
         NoNewPrivileges = true;
@@ -95,8 +94,6 @@ in
         SystemCallArchitectures = "native";
         UMask = "0077";
       };
-
-      Install.WantedBy = [ "default.target" ];
     };
   };
 }
