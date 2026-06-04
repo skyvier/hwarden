@@ -96,6 +96,33 @@ different CLI version. The main options are:
 - `services.hwarden-agent.cacheRefreshIntervalSeconds`
 - `services.hwarden-agent.extraEnvironment`
 
+## CI/CD
+
+GitHub Actions runs the CI/CD workflow in `.github/workflows/ci-cd.yml`.
+
+For pull requests, the workflow runs:
+
+- `cabal build all`
+- `cabal test all`
+- `test/scripts/run-all.sh`
+- `hlint app src test`
+- `ormolu --mode inplace` on a temporary copy of all Haskell files under
+  `app`, `src`, and `test`
+
+For pushes to `main`, the workflow runs the same checks and then publishes a
+compressed Nix store closure artifact for the wrapped `hwarden-agent` package.
+The artifact can be imported into another Nix store with:
+
+```sh
+zstd -dc hwarden-agent-<revision>-nix-closure.nar.zst | nix-store --import
+```
+
+Run the same checks locally from the pinned Nix shell:
+
+```sh
+nix-shell --pure shell.nix --run scripts/ci/check
+```
+
 ## Run
 
 Environment:

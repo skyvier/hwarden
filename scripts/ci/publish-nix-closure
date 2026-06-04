@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+OUTPUT_DIR=${1:-"$ROOT_DIR/dist"}
+SOURCE_REVISION=${GITHUB_SHA:-$(git -C "$ROOT_DIR" rev-parse HEAD)}
+SHORT_REVISION=${SOURCE_REVISION:0:7}
+ARTIFACT_NAME="hwarden-agent-${SHORT_REVISION}-nix-closure.nar.zst"
+
+cd "$ROOT_DIR"
+mkdir -p "$OUTPUT_DIR"
+
+package_path=$(
+  nix-build \
+    --no-out-link \
+    --argstr sourceRevision "$SHORT_REVISION" \
+    -E '{ sourceRevision }:
+        let
+          pkgs = import ./nix/pinned-pkgs.nix;
+        in
+          pkgs.callPackage ./nix/package.nix { inherit sourceRevision; }'
+)
+
+nix-store --query --requisites "$package_path" \
+  > "$OUTPUT_DIR/hwarden-agent-${SHORT_REVISION}-closure-paths.txt"
+
+nix-store --export $(cat "$OUTPUT_DIR/hwarden-agent-${SHORT_REVISION}-closure-paths.txt") \
+  | zstd -T0 -6 -o "$OUTPUT_DIR/$ARTIFACT_NAME"
+
+cat > "$OUTPUT_DIR/hwarden-agent-${SHORT_REVISION}-README.txt" <<EOF
+hwarden-agent Nix closure for ${SOURCE_REVISION}
+
+Import:
+  zstd -dc ${ARTIFACT_NAME} | nix-store --import
+
+Run:
+  ${package_path}/bin/hwarden-agent
+EOF
+
+printf '%s\n' "$OUTPUT_DIR/$ARTIFACT_NAME"
