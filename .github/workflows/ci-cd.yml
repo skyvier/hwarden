@@ -1,0 +1,53 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Build, test, lint, and format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Run checks
+        run: nix-shell --pure shell.nix --run scripts/ci/check
+
+  publish:
+    name: Publish Nix closure
+    runs-on: ubuntu-latest
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build Nix closure artifact
+        run: nix-shell --pure shell.nix --run 'scripts/ci/publish-nix-closure dist'
+
+      - name: Upload Nix closure artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hwarden-agent-nix-closure-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

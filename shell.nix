@@ -21,17 +21,22 @@ hpkgs.shellFor {
     pkgs.cabal-install
     pkgs.jq
     pkgs.netcat-openbsd
+    pkgs.nix
     pkgs.rofi
     pkgs.socat
     pkgs.xclip
     pkgs.ghcid
     pkgs.glow
     pkgs.entr
+    pkgs.haskellPackages.hlint
+    pkgs.haskellPackages.ormolu
+    pkgs.zstd
     bitwardenCli
     wrappedHwardenAgent
   ];
   shellHook = ''
     export HWARDEN_BW_PATH="${bitwardenCli}/bin/bw"
+    export NIX_PATH="nixpkgs=${lockedNixpkgs.src}"
     export PATH="${wrappedHwardenAgent}/bin:$PATH"
   '';
 }

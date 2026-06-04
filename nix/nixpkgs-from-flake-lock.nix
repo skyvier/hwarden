@@ -7,9 +7,9 @@ let
     url = "https://github.com/${locked.owner}/${locked.repo}/archive/${locked.rev}.tar.gz";
     sha256 = locked.narHash;
   };
+  pkgs = import src { inherit system; };
 in
 {
-  inherit locked src;
+  inherit locked src pkgs;
   rev = locked.rev;
-  pkgs = import src { inherit system; };
 }
