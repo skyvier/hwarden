@@ -164,5 +164,5 @@ assertLogDoesNotExpose secrets =
 assertTextDoesNotExpose :: [Text] -> Text -> Assertion
 assertTextDoesNotExpose secrets rendered =
   assertBool
-    ("expected log text not to expose secrets, got: " <> T.unpack rendered)
-    (all (not . (`T.isInfixOf` rendered)) secrets)
+    ("expected log text not to expose secrets, got: " <> T.unpack rendered) $
+    not (any (`T.isInfixOf` rendered) secrets)
