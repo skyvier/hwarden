@@ -104,7 +104,7 @@ sanitizeGetPasswordFailure :: SessionKey -> Text -> SanitizedText SessionSecret
 sanitizeGetPasswordFailure =
   sanitizeSessionKey "bw get password failed"
 
--- XXX: User is responsible for not passing secrets in fallback
+-- Fallbacks must be static non-secret text.
 sanitizeSessionKey :: Text -> SessionKey -> Text -> SanitizedText SessionSecret
 sanitizeSessionKey fallback (SessionKey sessionKey) err =
   let 

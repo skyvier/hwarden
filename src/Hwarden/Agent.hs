@@ -237,8 +237,6 @@ instance Arbitrary Command where
   arbitrary = elements [minBound..maxBound]
   shrink _ = []
 
--- TODO: write roundtrip tests for these
-
 toCommandIdentifier :: Command -> Text
 toCommandIdentifier UnlockCommand = "unlock"
 toCommandIdentifier StatusCommand = "status"
