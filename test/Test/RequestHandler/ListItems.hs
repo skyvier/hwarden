@@ -164,6 +164,7 @@ data BackendCalls = BackendCalls
   , syncCalls :: Int
   , listItemsCalls :: Int
   , getPasswordCalls :: Int
+  , lockCalls :: Int
   }
   deriving (Eq, Show)
 
@@ -174,6 +175,7 @@ noBackendCalls =
     , syncCalls = 0
     , listItemsCalls = 0
     , getPasswordCalls = 0
+    , lockCalls = 0
     }
 
 newtype CallCountingBitwarden a = CallCountingBitwarden
@@ -218,6 +220,10 @@ instance Bitwarden.Bitwarden CallCountingBitwarden where
     countBackendCall
       (\backendCalls -> backendCalls{getPasswordCalls = getPasswordCalls backendCalls + 1})
       getPasswordResult
+  lock _ =
+    countBackendCall
+      (\backendCalls -> backendCalls{lockCalls = lockCalls backendCalls + 1})
+      (const Bitwarden.LockSucceeded)
 
 countBackendCall ::
   (BackendCalls -> BackendCalls) ->

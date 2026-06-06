@@ -73,6 +73,7 @@ test-suite hwarden-agent-test
     , Test.RequestHandler.Status
     , Test.RequestHandler.ListItems
     , Test.RequestHandler.GetPassword
+    , Test.Shutdown
     , Test.Helpers
     , Test.Agent.Decide
     , Test.JsonCodec

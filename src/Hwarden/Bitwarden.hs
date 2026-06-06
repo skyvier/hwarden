@@ -4,6 +4,7 @@
 module Hwarden.Bitwarden (
   Bitwarden (..),
   GetPasswordError (..),
+  LockResult (..),
   ListItemsError (..),
   SyncError (..),
   UnlockError (..),
@@ -53,6 +54,12 @@ data SyncError
   | SyncFailed Text
   deriving (Eq, Show, Generic)
 
+data LockResult
+  = LockSucceeded
+  | LockFailed
+  | LockTimedOut
+  deriving (Eq, Show, Generic)
+
 instance Arbitrary UnlockError where
   arbitrary =
     oneof
@@ -91,6 +98,7 @@ class (Monad m) => Bitwarden m where
   listItems :: SessionKey -> m (Either ListItemsError [ItemSummary])
   sync :: SessionKey -> m (Either SyncError ())
   getPassword :: SessionKey -> LoginItemId -> m (Either GetPasswordError PasswordValue)
+  lock :: SessionKey -> m LockResult
 
 defaultBitwardenServerUrl :: Text
 defaultBitwardenServerUrl = "https://vault.bitwarden.eu"

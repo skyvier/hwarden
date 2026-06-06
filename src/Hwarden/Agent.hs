@@ -17,6 +17,7 @@ module Hwarden.Agent (
   Effect (..),
   Decision (..),
   GetPasswordError (..),
+  LockResult (..),
   ItemSummary (..),
   ListItemsError (..),
   LoginItemId (..),
@@ -41,6 +42,9 @@ module Hwarden.Agent (
   handleUnlock,
   handleRequest,
   handleRequestWith,
+  handleShutdownCleanup,
+  handleShutdownCleanupWith,
+  logShutdownLockOutcome,
   failureResponse,
   itemListResponse,
   passwordResultResponse,
@@ -52,6 +56,7 @@ module Hwarden.Agent (
   responsePasswordResult,
   runAgent,
   sanitizeUnlockError,
+  ShutdownLockOutcome (..),
   successResponse,
 )
 where
@@ -79,9 +84,10 @@ import Data.UUID.V4 (nextRandom)
 import GHC.Generics (Generic)
 import Hwarden.App (AgentT, Env (..), initAgentEnv, runAgentT)
 import Hwarden.Bitwarden (
-  Bitwarden (getPassword, unlock),
+  Bitwarden (getPassword, lock, unlock),
   GetPasswordError (..),
   ListItemsError (..),
+  LockResult (..),
   UnlockError (..),
  )
 import Hwarden.Bitwarden.Real (configureServer)
@@ -290,7 +296,11 @@ runAgent = do
           (conn, _) <- accept sock
           handleConnection env agentStateVar conn
     )
-    (close sock `finally` (cleanupSocket (Runtime.socketPath paths) `finally` closeScribes (envLogEnv env)))
+    ( close sock
+        `finally` ( handleShutdownCleanup env agentStateVar
+                      `finally` (cleanupSocket (Runtime.socketPath paths) `finally` closeScribes (envLogEnv env))
+                  )
+    )
 
 requireRuntimeDir :: IO FilePath
 requireRuntimeDir = do
@@ -365,6 +375,66 @@ handleRequestWith request agentState =
     GetPasswordAction sessionKey loginItemId ->
       handleGetPassword sessionKey loginItemId agentState
     Reply response -> pure (agentState, response, [])
+
+data ShutdownLockOutcome
+  = ShutdownLockSkippedNoLiveSession
+  | ShutdownLockSucceeded
+  | ShutdownLockFailed
+  | ShutdownLockTimedOut
+  deriving (Eq, Show, Generic)
+
+handleShutdownCleanup :: Env -> MVar AgentState -> IO ()
+handleShutdownCleanup env agentStateVar =
+  runAgentT env $ do
+    maybeSessionKey <-
+      modifyMVar agentStateVar $ \agentState -> do
+        let (newState, maybeLiveSessionKey) =
+              takeLiveSessionForShutdown agentState
+        pure (newState, maybeLiveSessionKey)
+    outcome <-
+      case maybeSessionKey of
+        Nothing ->
+          pure ShutdownLockSkippedNoLiveSession
+        Just sessionKey ->
+          lockResultToShutdownOutcome <$> lock sessionKey
+    logShutdownLockOutcome outcome
+
+handleShutdownCleanupWith :: (Bitwarden m) => AgentState -> m (AgentState, ShutdownLockOutcome)
+handleShutdownCleanupWith agentState =
+  case takeLiveSessionForShutdown agentState of
+    (_, Nothing) ->
+      pure (Locked, ShutdownLockSkippedNoLiveSession)
+    (newState, Just sessionKey) -> do
+      result <- lock sessionKey
+      pure
+        ( newState
+        , lockResultToShutdownOutcome result
+        )
+
+takeLiveSessionForShutdown :: AgentState -> (AgentState, Maybe SessionKey)
+takeLiveSessionForShutdown agentState =
+  case agentState of
+    Locked -> (Locked, Nothing)
+    Unlocked sessionKey _ -> (Locked, Just sessionKey)
+
+lockResultToShutdownOutcome :: LockResult -> ShutdownLockOutcome
+lockResultToShutdownOutcome result =
+  case result of
+    LockSucceeded -> ShutdownLockSucceeded
+    LockFailed -> ShutdownLockFailed
+    LockTimedOut -> ShutdownLockTimedOut
+
+logShutdownLockOutcome :: forall m. (MonadLog m) => ShutdownLockOutcome -> m ()
+logShutdownLockOutcome outcome =
+  case outcome of
+    ShutdownLockSkippedNoLiveSession ->
+      logInfoS @"shutdown skipped bw lock; no live session" @m
+    ShutdownLockSucceeded ->
+      logInfoS @"shutdown bw lock succeeded" @m
+    ShutdownLockFailed ->
+      logInfoS @"shutdown bw lock failed; continuing shutdown" @m
+    ShutdownLockTimedOut ->
+      logInfoS @"shutdown bw lock timed out; continuing shutdown" @m
 
 data Effect
   = StartCacheRefreshLoop SessionKey

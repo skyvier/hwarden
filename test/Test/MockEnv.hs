@@ -50,6 +50,7 @@ instance Bitwarden.Bitwarden MockBitwarden where
   listItems _ = MockBitwarden listItemsResult
   sync _ = MockBitwarden syncResult
   getPassword _ _ = MockBitwarden getPasswordResult
+  lock _ = pure Bitwarden.LockSucceeded
 
 instance MonadTime MockBitwarden where
   currentTime = MockBitwarden mockCurrentTime

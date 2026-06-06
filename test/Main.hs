@@ -33,6 +33,7 @@ import qualified Test.Logging as Logging
 import qualified Test.RequestHandler as RequestHandler
 import qualified Test.Runtime as Runtime
 import qualified Test.Sanitization as Sanitization
+import qualified Test.Shutdown as Shutdown
 import qualified Test.StateMachine as StateMachine
 
 main :: IO ()
@@ -50,6 +51,7 @@ tests =
     , Agent.Decide.tests
     , StateMachine.tests
     , RequestHandler.tests
+    , Shutdown.tests
     , JsonCodec.tests
     , ExceptionLogging.tests
     , Integration.tests
