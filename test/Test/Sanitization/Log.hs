@@ -132,6 +132,9 @@ instance Bitwarden.Bitwarden LoggingMockBitwarden where
       Right password -> do
         (logInfoF @"password result was: %{PasswordValue}" password :: LoggingMockBitwarden ())
         return $ Right password
+  lock sessionKey = do
+    (logInfoF @"running bw lock with %{SessionKey}" sessionKey :: LoggingMockBitwarden ())
+    pure Bitwarden.LockSucceeded
 
 instance MonadTime LoggingMockBitwarden where
   currentTime =

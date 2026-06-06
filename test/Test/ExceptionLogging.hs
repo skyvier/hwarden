@@ -10,7 +10,7 @@ import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
 import Hwarden.Agent (
   Password (..),
-  SessionKey,
+  SessionKey (..),
   Username (..),
   handleConnectionExceptionBoundary,
   handleRefreshIterationExceptionBoundary,
@@ -57,6 +57,10 @@ tests =
         connectionBoundaryRethrowsThreadKilled
     , testCase "Bitwarden command boundary rethrows ThreadKilled" $
         bitwardenCommandBoundaryRethrowsThreadKilled
+    , testCase "Bitwarden lock returns timed-out for a hung command" $
+        bitwardenLockTimesOut
+    , testCase "Bitwarden lock failure logs do not expose the session key" $
+        bitwardenLockFailureLogsDoNotExposeSessionKey
     , testCase "refresh iteration boundary does not log exception text" $
         refreshIterationLogsDoNotExposeSecret
           "refresh-secret"
@@ -109,6 +113,35 @@ bitwardenCommandBoundaryRethrowsThreadKilled = do
       (Left ThreadKilled)
       (result :: Either AsyncException (Either Bitwarden.UnlockError SessionKey))
   pure ()
+
+bitwardenLockTimesOut :: IO ()
+bitwardenLockTimesOut = do
+  _ <-
+    withBwScriptEnv "#!/bin/sh\nsleep 5\n" $ \env -> do
+      result <-
+        runAgentT env $
+          Bitwarden.lock (SessionKey "session-secret")
+      assertEqual
+        "hung bw lock should time out"
+        Bitwarden.LockTimedOut
+        result
+  pure ()
+
+bitwardenLockFailureLogsDoNotExposeSessionKey :: IO ()
+bitwardenLockFailureLogsDoNotExposeSessionKey = do
+  let secret = "session-secret"
+  logs <-
+    withBwScriptEnv "#!/bin/sh\nprintf '%s\\n' \"$BW_SESSION\" 1>&2\nexit 1\n" $ \env -> do
+      result <-
+        runAgentT env $
+          Bitwarden.lock (SessionKey secret)
+      assertEqual
+        "failed bw lock should be reported as non-fatal failure"
+        Bitwarden.LockFailed
+        result
+  assertBool
+    ("expected bw lock logs not to expose secret, got: " <> show logs)
+    (not (TE.encodeUtf8 secret `BS.isInfixOf` logs))
 
 refreshIterationLogsDoNotExposeSecret :: Text -> IO ()
 refreshIterationLogsDoNotExposeSecret secret = do
@@ -184,9 +217,13 @@ initCapturedLogEnv handle = do
 
 withSleepingBwEnv :: (Env -> IO ()) -> IO BS.ByteString
 withSleepingBwEnv action = do
+  withBwScriptEnv "#!/bin/sh\nsleep 5\n" action
+
+withBwScriptEnv :: BS.ByteString -> (Env -> IO ()) -> IO BS.ByteString
+withBwScriptEnv script action = do
   tempDir <- getTemporaryDirectory
   let bwPath = tempDir </> "hwarden-agent-sleeping-bw"
-  BS.writeFile bwPath "#!/bin/sh\nsleep 5\n"
+  BS.writeFile bwPath script
   setFileMode bwPath 0o700
   withCapturedAgentLogs $ \env ->
     action env{envBitwardenCliPath = bwPath}

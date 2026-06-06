@@ -11,6 +11,7 @@ module Hwarden.Bitwarden.Real (
 )
 where
 
+import Control.Concurrent (threadDelay)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, asks)
 import Data.Aeson (eitherDecodeStrict)
@@ -23,6 +24,7 @@ import Hwarden.Bitwarden (
   Bitwarden (..),
   GetPasswordError (..),
   ListItemsError (..),
+  LockResult (..),
   SyncError (..),
   UnlockError (..),
   extractLoginItems,
@@ -40,10 +42,13 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.IO (hClose)
 import System.Process (
   CreateProcess (env, std_err, std_out),
-  StdStream (CreatePipe),
+  ProcessHandle,
+  StdStream (CreatePipe, NoStream),
   createProcess,
+  getProcessExitCode,
   proc,
   readCreateProcessWithExitCode,
+  terminateProcess,
   waitForProcess,
  )
 import qualified UnliftIO.Exception as Exception
@@ -124,6 +129,15 @@ instance
       GetPasswordUnavailable
       parsePasswordValue
       (GetPasswordFailed . T.pack)
+
+  lock sessionKey = RealBitwardenT $ do
+    logInfoS @"running bw lock" @m
+    command <- authenticatedBwProcess sessionKey ["lock"]
+    result <- liftIO $ Exception.tryAny (runLockCommand command)
+    pure $
+      case result of
+        Left _ -> LockFailed
+        Right lockResult -> lockResult
 
 configureServer ::
   forall m r.
@@ -213,6 +227,49 @@ runProcessBytes command = do
   hClose stdoutHandle
   hClose stderrHandle
   pure (exitCode, stdoutBytes, stderrBytes)
+
+runLockCommand :: CreateProcess -> IO LockResult
+runLockCommand command = do
+  (Nothing, Nothing, Nothing, processHandle) <-
+    createProcess
+      command
+        { std_out = NoStream
+        , std_err = NoStream
+        }
+  result <- waitForProcessExitWithTimeout processHandle lockTimeoutMicroseconds
+  case result of
+    Nothing -> do
+      terminateProcess processHandle
+      _ <- waitForProcessExitWithTimeout processHandle lockTerminateWaitMicroseconds
+      pure LockTimedOut
+    Just ExitSuccess ->
+      pure LockSucceeded
+    Just (ExitFailure _) ->
+      pure LockFailed
+
+lockTimeoutMicroseconds :: Int
+lockTimeoutMicroseconds = 2000000
+
+lockTerminateWaitMicroseconds :: Int
+lockTerminateWaitMicroseconds = 500000
+
+waitForProcessExitWithTimeout :: ProcessHandle -> Int -> IO (Maybe ExitCode)
+waitForProcessExitWithTimeout processHandle timeoutMicroseconds =
+  go timeoutMicroseconds
+ where
+  pollIntervalMicroseconds = 50000
+  go remainingMicroseconds = do
+    result <- getProcessExitCode processHandle
+    case result of
+      Just exitCode ->
+        pure (Just exitCode)
+      Nothing
+        | remainingMicroseconds <= 0 ->
+            pure Nothing
+        | otherwise -> do
+            let delayMicroseconds = min pollIntervalMicroseconds remainingMicroseconds
+            threadDelay delayMicroseconds
+            go (remainingMicroseconds - delayMicroseconds)
 
 handleCheckedCommand ::
   (MonadIO m) =>
