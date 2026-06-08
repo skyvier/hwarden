@@ -6,6 +6,7 @@ import Control.Concurrent (ThreadId, forkIO, myThreadId, threadDelay, throwTo)
 import Control.Exception (AsyncException (ThreadKilled), throwIO, try)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import Data.Text (Text)
 import qualified Data.Text.Encoding as TE
 import Hwarden.Agent (
@@ -116,8 +117,13 @@ bitwardenCommandBoundaryRethrowsThreadKilled = do
 
 bitwardenLockTimesOut :: IO ()
 bitwardenLockTimesOut = do
+  let fakeBwSleepSeconds = 5
+      fakeBwSleepMicroseconds = fakeBwSleepSeconds * 1000000
+  assertBool
+    "fake bw sleep must be longer than the lock timeout"
+    (fakeBwSleepMicroseconds > Bitwarden.lockTimeoutMicroseconds)
   _ <-
-    withBwScriptEnv "#!/bin/sh\nsleep 5\n" $ \env -> do
+    withBwScriptEnv (sleepingBwScript fakeBwSleepSeconds) $ \env -> do
       result <-
         runAgentT env $
           Bitwarden.lock (SessionKey "session-secret")
@@ -217,12 +223,16 @@ initCapturedLogEnv handle = do
 
 withSleepingBwEnv :: (Env -> IO ()) -> IO BS.ByteString
 withSleepingBwEnv action = do
-  withBwScriptEnv "#!/bin/sh\nsleep 5\n" action
+  withBwScriptEnv (sleepingBwScript 5) action
+
+sleepingBwScript :: Int -> BS.ByteString
+sleepingBwScript sleepSeconds =
+  "#!/bin/sh\nsleep " <> BS8.pack (show sleepSeconds) <> "\n"
 
 withBwScriptEnv :: BS.ByteString -> (Env -> IO ()) -> IO BS.ByteString
 withBwScriptEnv script action = do
   tempDir <- getTemporaryDirectory
-  let bwPath = tempDir </> "hwarden-agent-sleeping-bw"
+  let bwPath = tempDir </> "hwarden-agent-fake-bw"
   BS.writeFile bwPath script
   setFileMode bwPath 0o700
   withCapturedAgentLogs $ \env ->

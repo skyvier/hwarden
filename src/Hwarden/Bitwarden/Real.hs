@@ -29,6 +29,7 @@ import Hwarden.Bitwarden (
   SyncError (..),
   UnlockError (..),
   extractLoginItems,
+  lockTimeoutMicroseconds,
  )
 import Hwarden.Logging (MonadLog, logInfoF, logInfoS)
 import Hwarden.Types (
@@ -242,9 +243,6 @@ runLockCommand command = do
       Left () -> LockTimedOut
       Right (Left lockResult) -> lockResult
       Right (Right lockResult) -> lockResult
-
-lockTimeoutMicroseconds :: Int
-lockTimeoutMicroseconds = 2000000
 
 handleCheckedCommand ::
   (MonadIO m) =>
