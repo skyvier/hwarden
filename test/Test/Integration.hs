@@ -38,11 +38,13 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (IOMode (..), withFile)
 import System.IO.Temp (withSystemTempDirectory, withTempDirectory)
+import System.Posix.Signals (sigTERM, signalProcess)
 import System.Process (
   CreateProcess (cwd, env, std_err, std_out),
   ProcessHandle,
   StdStream (..),
   createProcess,
+  getPid,
   getProcessExitCode,
   proc,
   readCreateProcessWithExitCode,
@@ -69,6 +71,7 @@ data BwBehavior = BwBehavior
   , listItemsBehaviors :: [CommandBehavior]
   , syncBehavior :: [CommandBehavior]
   , getPasswordBehavior :: CommandBehavior
+  , lockBehavior :: CommandBehavior
   }
 
 data BwPathMode
@@ -569,6 +572,37 @@ tests =
               "expected empty password failure response"
               (Agent.failureResponse "password was empty")
               passwordResponse
+    , testCase "SIGTERM triggers shutdown cleanup for a live session" $
+        let
+          agentConfig =
+            defaultAgentConfig
+              { agentBwBehavior =
+                  defaultFailingBw
+                    { logoutBehavior = CommandSucceeds ""
+                    , configServerBehavior = CommandSucceeds ""
+                    , unlockBehavior = LoginCommandBehavior (CommandSucceeds "session-key-123")
+                    , lockBehavior = CommandSucceeds ""
+                    }
+              }
+         in
+          withReadyAgent agentConfig $ \agent -> do
+            let appDataDir = Runtime.bitwardenCliAppDataDir $ runtimePaths agent
+                lockFile = appDataDir </> "lock-attempted"
+            unlockResponse <-
+              sendRequest
+                (socketPath agent)
+                (Agent.UnlockRequest (Agent.Username "me@example.com") (Agent.Password "good-password"))
+            assertEqual "expected successful unlock response" (Agent.successResponse "unlocked") unlockResponse
+
+            maybePid <- getPid (processHandle agent)
+            case maybePid of
+              Nothing -> fail "agent process had no process id"
+              Just pid -> signalProcess sigTERM pid
+            exitCode <- waitForProcess (processHandle agent)
+            lockAttempted <- doesFileExist lockFile
+
+            assertEqual "expected graceful SIGTERM exit" ExitSuccess exitCode
+            assertBool "expected bw lock during SIGTERM shutdown" lockAttempted
     , testCase "sending unlock fails when bw requires a two-factor code" $
         let
           agentConfig =
@@ -851,6 +885,13 @@ scriptFor expectedExecutablePath expectedAppDataDir expectedServerUrl bwBehavior
     , "    printf '%s' $((sync_items_count + 1)) > \"$SYNC_ITEMS_COUNT_FILE\""
     , emitIndexedBehavior "sync_items_count" "    " (syncBehavior bwBehavior)
     , "    ;;"
+    , "  lock)"
+    , "    if [ ! -f \"$BITWARDENCLI_APPDATA_DIR/login-success\" ]; then"
+    , "      printf '%s\\n' 'login was not successful before lock' 1>&2"
+    , "      exit 1"
+    , "    fi"
+    , emitLockBehavior "    " (lockBehavior bwBehavior)
+    , "    ;;"
     , "  *)"
     , "    printf '%s\\n' 'unsupported bw command' 1>&2"
     , "    exit 1"
@@ -958,6 +999,24 @@ emitConfigBehavior indent commandBehavior =
         ]
     CommandArbitrary mkCmd -> mkCmd indent
 
+emitLockBehavior :: BS8.ByteString -> CommandBehavior -> BS8.ByteString
+emitLockBehavior indent commandBehavior =
+  case commandBehavior of
+    CommandSucceeds _ ->
+      BS8.unlines
+        [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/lock-attempted\""
+        , indent <> "exit 0"
+        ]
+    CommandFails errMessage ->
+      BS8.unlines
+        [ indent <> ": > \"$BITWARDENCLI_APPDATA_DIR/lock-attempted\""
+        , indent <> "while IFS= read -r line; do printf '%s\\n' \"$line\" 1>&2; done <<'EOF'"
+        , errMessage
+        , "EOF"
+        , indent <> "exit 1"
+        ]
+    CommandArbitrary mkCmd -> mkCmd indent
+
 defaultFailingBw :: BwBehavior
 defaultFailingBw =
   BwBehavior
@@ -967,6 +1026,7 @@ defaultFailingBw =
     , listItemsBehaviors = [CommandFails "bw list items failed"]
     , syncBehavior = [CommandFails "bw sync failed"]
     , getPasswordBehavior = CommandFails "bw get password failed"
+    , lockBehavior = CommandFails "bw lock failed"
     }
 
 -- Behavior from Bitwarden CLI that allows the server to start

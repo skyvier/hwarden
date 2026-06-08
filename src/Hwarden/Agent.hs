@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -63,7 +64,8 @@ module Hwarden.Agent (
 )
 where
 
-import Control.Exception (finally)
+import Control.Concurrent (myThreadId, throwTo)
+import Control.Exception (Exception, bracket, catch, finally)
 import Control.Monad (forever, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
@@ -81,6 +83,7 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Typeable (Typeable)
 import qualified Data.UUID as UUID
 import Data.UUID.V4 (nextRandom)
 import GHC.Generics (Generic)
@@ -156,6 +159,11 @@ import System.Directory (
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import System.Posix.Files (ownerModes, setFileMode)
+import System.Posix.Signals (
+  Handler (..),
+  installHandler,
+  sigTERM,
+ )
 import Test.QuickCheck (elements, oneof)
 import Test.QuickCheck.Arbitrary (Arbitrary (arbitrary, shrink), genericShrink)
 import Test.QuickCheck.Instances.Text ()
@@ -291,18 +299,35 @@ runAgent = do
   agentStateVar <- newMVar Locked
   sock <- socket AF_UNIX Stream defaultProtocol
   finallyAll
-    ( do
+    ( withSigTermShutdown $ do
         bind sock (SockAddrUnix (Runtime.socketPath paths))
         listen sock maxListenQueue
-        forever $ do
-          (conn, _) <- accept sock
-          handleConnection env agentStateVar conn
+        serveConnections env agentStateVar sock
     )
     [ close sock
     , handleShutdownCleanup env agentStateVar
     , cleanupSocket (Runtime.socketPath paths)
     , void (closeScribes (envLogEnv env))
     ]
+
+serveConnections :: Env -> MVar AgentState -> Socket -> IO ()
+serveConnections env agentStateVar sock =
+  forever $ do
+    (conn, _) <- accept sock
+    handleConnection env agentStateVar conn
+
+withSigTermShutdown :: IO () -> IO ()
+withSigTermShutdown action = do
+  mainThread <- myThreadId
+  bracket
+    (installHandler sigTERM (Catch (throwTo mainThread SigTermShutdown)) Nothing)
+    (\oldHandler -> void (installHandler sigTERM oldHandler Nothing))
+    (\_ -> action `catch` \SigTermShutdown -> pure ())
+
+data SigTermShutdown = SigTermShutdown
+  deriving (Show, Typeable)
+
+instance Exception SigTermShutdown
 
 finallyAll :: IO a -> [IO ()] -> IO a
 finallyAll action cleanups =
