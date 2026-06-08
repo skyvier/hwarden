@@ -43,12 +43,10 @@ import System.Exit (ExitCode (ExitFailure, ExitSuccess))
 import System.IO (hClose)
 import System.Process (
   CreateProcess (env, std_err, std_out),
-  ProcessHandle,
-  StdStream (CreatePipe, NoStream),
+  StdStream (CreatePipe),
   createProcess,
   proc,
   readCreateProcessWithExitCode,
-  terminateProcess,
   waitForProcess,
  )
 import qualified UnliftIO.Exception as Exception
@@ -230,38 +228,23 @@ runProcessBytes command = do
 
 runLockCommand :: CreateProcess -> IO LockResult
 runLockCommand command = do
-  (Nothing, Nothing, Nothing, processHandle) <-
-    createProcess
-      command
-        { std_out = NoStream
-        , std_err = NoStream
-        }
-  result <- waitForProcessExitWithTimeout processHandle lockTimeoutMicroseconds
-  case result of
-    Nothing -> do
-      terminateProcess processHandle
-      _ <- waitForProcessExitWithTimeout processHandle lockTerminateWaitMicroseconds
-      pure LockTimedOut
-    Just ExitSuccess ->
-      pure LockSucceeded
-    Just (ExitFailure _) ->
-      pure LockFailed
+  result <-
+    race
+      (threadDelay lockTimeoutMicroseconds)
+      ( handleCheckedCommand
+          (runCommand command)
+          LockFailed
+          (const (Right LockSucceeded))
+          (const LockFailed)
+      )
+  pure $
+    case result of
+      Left () -> LockTimedOut
+      Right (Left lockResult) -> lockResult
+      Right (Right lockResult) -> lockResult
 
 lockTimeoutMicroseconds :: Int
 lockTimeoutMicroseconds = 2000000
-
-lockTerminateWaitMicroseconds :: Int
-lockTerminateWaitMicroseconds = 500000
-
-waitForProcessExitWithTimeout :: ProcessHandle -> Int -> IO (Maybe ExitCode)
-waitForProcessExitWithTimeout processHandle timeoutMicroseconds
-  | timeoutMicroseconds <= 0 = pure Nothing
-  | otherwise = do
-      result <- race (threadDelay timeoutMicroseconds) (waitForProcess processHandle)
-      pure $
-        case result of
-          Left () -> Nothing
-          Right exitCode -> Just exitCode
 
 handleCheckedCommand ::
   (MonadIO m) =>
