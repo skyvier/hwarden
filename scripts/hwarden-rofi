@@ -22,7 +22,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 hwarden_require_rofi_dependencies
-hwarden_require_x11_clipboard
+hwarden_require_clipboard
 
 "$SCRIPT_DIR/hwarden-ensure-unlocked"
 

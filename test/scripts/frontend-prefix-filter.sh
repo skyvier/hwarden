@@ -74,6 +74,8 @@ EOF2
 chmod +x "$TMP_DIR/xclip"
 
 export PATH="$TMP_DIR:$PATH"
+unset WAYLAND_DISPLAY
+export DISPLAY=:1
 
 # shellcheck source=scripts/hwarden-lib
 source "$REPO_DIR/scripts/hwarden-lib"

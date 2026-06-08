@@ -237,6 +237,40 @@ hwarden_require_rofi_dependencies() {
   hwarden_require_cmd jq
 }
 
-hwarden_require_x11_clipboard() {
-  hwarden_require_cmd xclip
+hwarden_display_server() {
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    printf 'wayland\n'
+  elif [ -n "${DISPLAY:-}" ]; then
+    printf 'x11\n'
+  else
+    hwarden_fail "could not detect display server"
+  fi
+}
+
+hwarden_require_clipboard() {
+  local display_server
+
+  display_server=$(hwarden_display_server) || return $?
+  case "$display_server" in
+    wayland)
+      hwarden_require_cmd wl-copy
+      ;;
+    x11)
+      hwarden_require_cmd xclip
+      ;;
+  esac
+}
+
+hwarden_copy_to_clipboard() {
+  local display_server
+
+  display_server=$(hwarden_display_server) || return $?
+  case "$display_server" in
+    wayland)
+      wl-copy
+      ;;
+    x11)
+      xclip -selection clipboard
+      ;;
+  esac
 }

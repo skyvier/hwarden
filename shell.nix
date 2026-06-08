@@ -24,6 +24,7 @@ hpkgs.shellFor {
     pkgs.nix
     pkgs.rofi
     pkgs.socat
+    pkgs.wl-clipboard
     pkgs.xclip
     pkgs.ghcid
     pkgs.glow

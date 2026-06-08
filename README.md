@@ -190,6 +190,7 @@ Frontend dependencies:
 - `rofi`
 - `jq`
 - `nc` with Unix socket support
+- `wl-copy` from `wl-clipboard` on Wayland
 - `xclip`
 
 Main entrypoint:
@@ -213,7 +214,7 @@ The rofi frontend:
 - prompts for Bitwarden email and password when needed
 - shows the item cache age and latest refresh result in the picker prompt
 - lets you choose a login item from rofi
-- copies the selected password to the X11 clipboard
+- copies the selected password to the Wayland or X11 clipboard
 
 Available helper commands:
 
