@@ -1,12 +1,15 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Test.Shutdown (tests) where
 
+import Control.Exception (SomeException, try)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.State.Strict (State, modify, runState)
 import Control.Monad.Writer.Strict (WriterT, execWriterT, tell)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import qualified Data.Text as T
 import Hwarden.Agent (
   AgentState (..),
@@ -14,6 +17,7 @@ import Hwarden.Agent (
   LockResult (..),
   SessionKey (..),
   ShutdownLockOutcome (..),
+  finallyAll,
   handleShutdownCleanupWith,
   logShutdownLockOutcome,
  )
@@ -79,7 +83,58 @@ tests =
         assertBool
           ("expected shutdown logs not to expose session key, got: " <> show logs)
           (not (any (rawSessionKey `T.isInfixOf`) logs))
+    , testCase "finallyAll runs cleanups in order after success" $ do
+        events <- newIORef []
+        result <-
+          ( finallyAll
+              (recordEvent events "action" >> pure "result")
+              [ recordEvent events "cleanup-1"
+              , recordEvent events "cleanup-2"
+              , recordEvent events "cleanup-3"
+              ] ::
+              IO String
+          )
+        result @?= "result"
+        readIORef events
+          >>= (@?= ["action", "cleanup-1", "cleanup-2", "cleanup-3"])
+    , testCase "finallyAll runs cleanups after action failure" $ do
+        events <- newIORef []
+        result <-
+          try @SomeException $
+            finallyAll
+              (recordEvent events "action" >> fail "action failed")
+              [ recordEvent events "cleanup-1"
+              , recordEvent events "cleanup-2"
+              , recordEvent events "cleanup-3"
+              ]
+        assertException result
+        readIORef events
+          >>= (@?= ["action", "cleanup-1", "cleanup-2", "cleanup-3"])
+    , testCase "finallyAll continues cleanups after cleanup failure" $ do
+        events <- newIORef []
+        result <-
+          try @SomeException $
+            finallyAll
+              (recordEvent events "action")
+              [ recordEvent events "cleanup-1" >> fail "cleanup failed"
+              , recordEvent events "cleanup-2"
+              , recordEvent events "cleanup-3"
+              ]
+        assertException result
+        readIORef events
+          >>= (@?= ["action", "cleanup-1", "cleanup-2", "cleanup-3"])
     ]
+
+recordEvent :: IORef [String] -> String -> IO ()
+recordEvent events event =
+  modifyIORef' events (<> [event])
+
+assertException :: Either SomeException a -> IO ()
+assertException result =
+  assertBool "expected finallyAll to throw" $
+    case result of
+      Left _ -> True
+      Right _ -> False
 
 newtype ShutdownMock a = ShutdownMock
   { runShutdownMockInternal :: ReaderT LockResult (State [SessionKey]) a
