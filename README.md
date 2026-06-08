@@ -1,5 +1,11 @@
 # hwarden-agent
 
+<div align="center">
+
+https://github.com/user-attachments/assets/2a3344e5-dd19-4e8c-ac6f-3d1f2f730a51
+
+</div>
+
 `hwarden-agent` is a small Haskell daemon for using Bitwarden CLI from local automation without handing every caller direct access to `BW_SESSION` or the user's normal Bitwarden CLI profile.
 
 The daemon listens on a local Unix socket, accepts a narrow JSON protocol, unlocks Bitwarden CLI with `bw login --raw`, and keeps the resulting session key only in process memory. Responses never include `BW_SESSION`.
