@@ -12,5 +12,6 @@ nix-shell --pure "$ROOT_DIR/shell.nix" --run '
   command -v jq >/dev/null
   command -v nc >/dev/null
   command -v rofi >/dev/null
+  command -v wl-copy >/dev/null
   command -v xclip >/dev/null
 '
