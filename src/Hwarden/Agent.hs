@@ -54,6 +54,7 @@ module Hwarden.Agent (
   responseIsFailure,
   responseItems,
   responsePasswordResult,
+  finallyAll,
   runAgent,
   sanitizeUnlockError,
   ShutdownLockOutcome (..),
@@ -288,7 +289,7 @@ runAgent = do
 
   agentStateVar <- newMVar Locked
   sock <- socket AF_UNIX Stream defaultProtocol
-  finally
+  finallyAll
     ( do
         bind sock (SockAddrUnix (Runtime.socketPath paths))
         listen sock maxListenQueue
@@ -296,11 +297,15 @@ runAgent = do
           (conn, _) <- accept sock
           handleConnection env agentStateVar conn
     )
-    ( close sock
-        `finally` ( handleShutdownCleanup env agentStateVar
-                      `finally` (cleanupSocket (Runtime.socketPath paths) `finally` closeScribes (envLogEnv env))
-                  )
-    )
+    [ close sock
+    , handleShutdownCleanup env agentStateVar
+    , cleanupSocket (Runtime.socketPath paths)
+    , void (closeScribes (envLogEnv env))
+    ]
+
+finallyAll :: IO a -> [IO ()] -> IO a
+finallyAll action cleanups =
+  action `finally` foldr finally (pure ()) cleanups
 
 requireRuntimeDir :: IO FilePath
 requireRuntimeDir = do
