@@ -13,6 +13,7 @@ module Hwarden.Bitwarden (
   defaultBitwardenServerUrl,
   determineBitwardenServerUrl,
   extractLoginItems,
+  lockTimeoutMicroseconds,
 )
 where
 
@@ -59,6 +60,9 @@ data LockResult
   | LockFailed
   | LockTimedOut
   deriving (Eq, Show, Generic)
+
+lockTimeoutMicroseconds :: Int
+lockTimeoutMicroseconds = 2000000
 
 instance Arbitrary UnlockError where
   arbitrary =
