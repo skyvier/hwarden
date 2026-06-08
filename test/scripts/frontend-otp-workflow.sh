@@ -64,6 +64,8 @@ unlock_count=$(grep -c '"cmd":"unlock"' "$REQUEST_LOG")
 
 grep -F "Bitwarden email" "$ROFI_LOG" >/dev/null
 grep -F "Bitwarden password" "$ROFI_LOG" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -dmenu -p Bitwarden email" "$ROFI_LOG" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -dmenu -password -p Bitwarden password" "$ROFI_LOG" >/dev/null
 grep -F "two-factor code required; run scripts/hwarden-first-login" "$ROFI_LOG" >/dev/null
 if grep -F "Email OTP" "$ROFI_LOG" >/dev/null; then
   echo "frontend should not prompt for Email OTP anymore" >&2

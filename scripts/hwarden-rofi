@@ -54,7 +54,7 @@ labels=$(
 
 selected_index=$(
   printf '%s\n' "$labels" |
-    rofi -dmenu -format i -p "$rofi_prompt"
+    rofi "${HWARDEN_ROFI_ARGS[@]}" -dmenu -format i -p "$rofi_prompt"
 ) || exit 1
 
 [ -n "$selected_index" ] || exit 1

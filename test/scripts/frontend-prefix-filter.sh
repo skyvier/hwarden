@@ -108,6 +108,7 @@ expected_filtered_labels=$'Demo Mail [demo@example.com]\ndemo Admin [root@exampl
 expected_unfiltered_labels=$'Demo Mail [demo@example.com]\nnull [null@example.com]\nPersonal Bank [me@example.com]\nnull [missing@example.com]\ndemo Admin [root@example.com]'
 actual_labels=$(cat "$TMP_DIR/picker-labels.txt")
 grep -F -- "-dmenu -format i -p Bitwarden - cache 2m old, last refresh failed" "$TMP_DIR/rofi-events.log" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -dmenu -format i -p Bitwarden - cache 2m old, last refresh failed" "$TMP_DIR/rofi-events.log" >/dev/null
 
 [ "$actual_labels" = "$expected_filtered_labels" ] || {
   printf '%s\n' 'expected prefix filtering to restrict picker labels' >&2
@@ -140,6 +141,7 @@ if "$REPO_DIR/scripts/hwarden-rofi" --prefix missing >/dev/null 2>"$TMP_DIR/miss
 fi
 
 grep -F -- "-e no login items match prefix: missing" "$TMP_DIR/rofi-events.log" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -e no login items match prefix: missing" "$TMP_DIR/rofi-events.log" >/dev/null
 
 if "$REPO_DIR/scripts/hwarden-rofi" --prefix >/dev/null 2>"$TMP_DIR/missing-value.stderr"; then
   printf '%s\n' 'expected missing --prefix value invocation to fail' >&2

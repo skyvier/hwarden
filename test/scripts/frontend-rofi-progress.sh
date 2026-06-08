@@ -47,6 +47,8 @@ hwarden_rofi_progress \
 
 grep -F "Loading password..." "$ROFI_LOG" >/dev/null
 grep -F "Password copied" "$ROFI_LOG" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -e Loading password..." "$ROFI_LOG" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -e Password copied" "$ROFI_LOG" >/dev/null
 grep -F "copied" "$WORK_LOG" >/dev/null
 
 if hwarden_rofi_progress \
@@ -59,4 +61,5 @@ if hwarden_rofi_progress \
 fi
 
 grep -F "Password copy failed" "$ROFI_LOG" >/dev/null
+grep -F -- "-theme-str window { width: 800px; } -e Password copy failed" "$ROFI_LOG" >/dev/null
 grep -F "failed" "$FAIL_LOG" >/dev/null

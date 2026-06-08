@@ -189,6 +189,8 @@ hwarden_rofi_item_prompt() {
   printf 'Bitwarden - cache %s old, %s' "$cache_age_label" "$cache_refresh_status_label"
 }
 
+readonly -a HWARDEN_ROFI_ARGS=(-theme-str 'window { width: 800px; }')
+
 hwarden_filter_items_by_prefix() {
   local items_json=$1
   local prefix=$2
@@ -213,17 +215,17 @@ hwarden_password_value() {
 
 hwarden_rofi_input() {
   local prompt=$1
-  printf '' | rofi -dmenu -p "$prompt"
+  printf '' | rofi "${HWARDEN_ROFI_ARGS[@]}" -dmenu -p "$prompt"
 }
 
 hwarden_rofi_secret() {
   local prompt=$1
-  printf '' | rofi -dmenu -password -p "$prompt"
+  printf '' | rofi "${HWARDEN_ROFI_ARGS[@]}" -dmenu -password -p "$prompt"
 }
 
 hwarden_rofi_error() {
   local message=$1
-  rofi -e "$message" >/dev/null 2>&1 || true
+  rofi "${HWARDEN_ROFI_ARGS[@]}" -e "$message" >/dev/null 2>&1 || true
 }
 
 hwarden_rofi_notice_for() {
@@ -231,7 +233,7 @@ hwarden_rofi_notice_for() {
   local duration_seconds=${2:-1}
   local rofi_pid
 
-  rofi -e "$message" >/dev/null 2>&1 &
+  rofi "${HWARDEN_ROFI_ARGS[@]}" -e "$message" >/dev/null 2>&1 &
   rofi_pid=$!
 
   (
@@ -251,7 +253,7 @@ hwarden_rofi_progress() {
 
   shift 3
 
-  rofi -e "$loading_message" >/dev/null 2>&1 &
+  rofi "${HWARDEN_ROFI_ARGS[@]}" -e "$loading_message" >/dev/null 2>&1 &
   loading_pid=$!
 
   if "$@"; then
