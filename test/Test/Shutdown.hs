@@ -7,7 +7,7 @@ module Test.Shutdown (tests) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad.Reader (ReaderT, ask, runReaderT)
-import Control.Monad.State.Strict (State, modify, runState)
+import Control.Monad.State.Strict (State, gets, modify, runState)
 import Control.Monad.Writer.Strict (WriterT, execWriterT, tell)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import qualified Data.Text as T
@@ -31,45 +31,49 @@ tests =
   testGroup
     "shutdown cleanup"
     [ testCase "no live session skips bw lock" $
-        let (result, lockAttempts) =
-              runShutdownMock LockSucceeded $
-                handleShutdownCleanupWith Locked
+        let (outcome, finalState, lockAttempts) =
+              runShutdownMock LockSucceeded Locked $
+                handleShutdownCleanupWith shutdownStateUpdate
          in do
-              result @?= (Locked, ShutdownLockSkippedNoLiveSession)
+              outcome @?= ShutdownLockSkippedNoLiveSession
+              finalState @?= Locked
               lockAttempts @?= []
     , testCase "live session attempts bw lock" $
         let sessionKey = SessionKey "session-secret"
-            (result, lockAttempts) =
-              runShutdownMock LockSucceeded $
-                handleShutdownCleanupWith (Unlocked sessionKey CacheNotYetFilled)
+            (outcome, finalState, lockAttempts) =
+              runShutdownMock LockSucceeded (Unlocked sessionKey CacheNotYetFilled) $
+                handleShutdownCleanupWith shutdownStateUpdate
          in do
-              result @?= (Locked, ShutdownLockSucceeded)
+              outcome @?= ShutdownLockSucceeded
+              finalState @?= Locked
               lockAttempts @?= [sessionKey]
     , testCase "lock command failure still leaves shutdown cleanup successful" $
         let sessionKey = SessionKey "session-secret"
-            (result, lockAttempts) =
-              runShutdownMock LockFailed $
-                handleShutdownCleanupWith (Unlocked sessionKey CacheNotYetFilled)
+            (outcome, finalState, lockAttempts) =
+              runShutdownMock LockFailed (Unlocked sessionKey CacheNotYetFilled) $
+                handleShutdownCleanupWith shutdownStateUpdate
          in do
-              result @?= (Locked, ShutdownLockFailed)
+              outcome @?= ShutdownLockFailed
+              finalState @?= Locked
               lockAttempts @?= [sessionKey]
     , testCase "lock timeout still leaves shutdown cleanup successful" $
         let sessionKey = SessionKey "session-secret"
-            (result, lockAttempts) =
-              runShutdownMock LockTimedOut $
-                handleShutdownCleanupWith (Unlocked sessionKey CacheNotYetFilled)
+            (outcome, finalState, lockAttempts) =
+              runShutdownMock LockTimedOut (Unlocked sessionKey CacheNotYetFilled) $
+                handleShutdownCleanupWith shutdownStateUpdate
          in do
-              result @?= (Locked, ShutdownLockTimedOut)
+              outcome @?= ShutdownLockTimedOut
+              finalState @?= Locked
               lockAttempts @?= [sessionKey]
     , testCase "repeated shutdown cleanup attempts bw lock at most once" $
         let sessionKey = SessionKey "session-secret"
-            (finalState, lockAttempts) =
-              runShutdownMock LockSucceeded $ do
-                (firstState, _) <-
-                  handleShutdownCleanupWith (Unlocked sessionKey CacheNotYetFilled)
-                (secondState, _) <- handleShutdownCleanupWith firstState
-                pure secondState
+            (outcomes, finalState, lockAttempts) =
+              runShutdownMock LockSucceeded (Unlocked sessionKey CacheNotYetFilled) $ do
+                firstOutcome <- handleShutdownCleanupWith shutdownStateUpdate
+                secondOutcome <- handleShutdownCleanupWith shutdownStateUpdate
+                pure [firstOutcome, secondOutcome]
          in do
+              outcomes @?= [ShutdownLockSucceeded, ShutdownLockSkippedNoLiveSession]
               finalState @?= Locked
               lockAttempts @?= [sessionKey]
     , testCase "shutdown logs do not contain the session key" $ do
@@ -137,13 +141,36 @@ assertException result =
       Right _ -> False
 
 newtype ShutdownMock a = ShutdownMock
-  { runShutdownMockInternal :: ReaderT LockResult (State [SessionKey]) a
+  { runShutdownMockInternal :: ReaderT LockResult (State ShutdownMockState) a
   }
   deriving (Functor, Applicative, Monad)
 
-runShutdownMock :: LockResult -> ShutdownMock a -> (a, [SessionKey])
-runShutdownMock lockResult action =
-  runState (runReaderT (runShutdownMockInternal action) lockResult) []
+data ShutdownMockState = ShutdownMockState
+  { shutdownLockAttempts :: [SessionKey]
+  , shutdownAgentState :: AgentState
+  }
+
+runShutdownMock :: LockResult -> AgentState -> ShutdownMock a -> (a, AgentState, [SessionKey])
+runShutdownMock lockResult initialAgentState action =
+  let (result, finalMockState) =
+        runState
+          (runReaderT (runShutdownMockInternal action) lockResult)
+          ShutdownMockState
+            { shutdownLockAttempts = []
+            , shutdownAgentState = initialAgentState
+            }
+   in (result, shutdownAgentState finalMockState, shutdownLockAttempts finalMockState)
+
+shutdownStateUpdate ::
+  (AgentState -> ShutdownMock (AgentState, Maybe SessionKey)) ->
+  ShutdownMock (Maybe SessionKey)
+shutdownStateUpdate updateAgentState = ShutdownMock $ do
+  agentState <- gets shutdownAgentState
+  (newAgentState, maybeSessionKey) <-
+    runShutdownMockInternal (updateAgentState agentState)
+  modify $ \mockState ->
+    mockState{shutdownAgentState = newAgentState}
+  pure maybeSessionKey
 
 instance Bitwarden ShutdownMock where
   unlock _ _ = pure (Left UnlockUnavailable)
@@ -151,7 +178,8 @@ instance Bitwarden ShutdownMock where
   sync _ = pure (Left SyncUnavailable)
   getPassword _ _ = pure (Left GetPasswordUnavailable)
   lock sessionKey = ShutdownMock $ do
-    modify (<> [sessionKey])
+    modify $ \mockState ->
+      mockState{shutdownLockAttempts = shutdownLockAttempts mockState <> [sessionKey]}
     ask
 
 newtype ShutdownLog a = ShutdownLog
