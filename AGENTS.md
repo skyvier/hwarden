@@ -15,7 +15,10 @@
 - Run with `cabal run hwarden-agent`.
 - `XDG_RUNTIME_DIR` must be set before running.
 - For sandboxed environments, `HOME=/tmp cabal build` avoids Cabal config writes to a read-only home directory.
-- Before committing, reformat the code base with `dev/format`
+- Reformat the code base with `dev/format`
+- Run backend tests with `cabal test`
+- Run frontend tests with `bash test/scripts/run-all.sh`
+- Run hlint with `hlint src app test`
 
 ## Manual check
 
