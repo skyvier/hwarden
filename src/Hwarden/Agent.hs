@@ -280,7 +280,7 @@ instance Arbitrary AgentState where
 runAgent :: IO ()
 runAgent = do
   runtimeDir <- requireRuntimeDir
-  paths <- either die pure (Runtime.deriveAgentPaths runtimeDir)
+  paths <- Runtime.resolveAgentPaths runtimeDir >>= either die pure
   env <- initAgentEnv runtimeDir
 
   prepareRuntimeDir (Runtime.socketDir paths)

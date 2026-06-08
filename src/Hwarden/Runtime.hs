@@ -1,9 +1,11 @@
 module Hwarden.Runtime (
   AgentPaths (..),
   deriveAgentPaths,
+  resolveAgentPaths,
 )
 where
 
+import System.Directory (XdgDirectory (XdgConfig), getXdgDirectory)
 import System.FilePath ((</>))
 
 data AgentPaths = AgentPaths
@@ -14,8 +16,13 @@ data AgentPaths = AgentPaths
   }
   deriving (Eq, Show)
 
-deriveAgentPaths :: FilePath -> Either String AgentPaths
-deriveAgentPaths baseRuntimeDir =
+resolveAgentPaths :: FilePath -> IO (Either String AgentPaths)
+resolveAgentPaths baseRuntimeDir = do
+  appDataDir <- getXdgDirectory XdgConfig ("hwarden" </> "bitwarden-cli")
+  pure (deriveAgentPaths baseRuntimeDir appDataDir)
+
+deriveAgentPaths :: FilePath -> FilePath -> Either String AgentPaths
+deriveAgentPaths baseRuntimeDir appDataDir =
   if length agentSocketPath > maxUnixSocketPathLength
     then Left "derived UNIX socket path is too long"
     else
@@ -24,7 +31,7 @@ deriveAgentPaths baseRuntimeDir =
           { runtimeDir = baseRuntimeDir
           , socketDir = hwardenRuntimeDir
           , socketPath = agentSocketPath
-          , bitwardenCliAppDataDir = hwardenRuntimeDir </> "bitwarden-cli"
+          , bitwardenCliAppDataDir = appDataDir
           }
  where
   hwardenRuntimeDir = baseRuntimeDir </> "hwarden"
