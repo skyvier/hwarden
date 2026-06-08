@@ -6,7 +6,8 @@ module Hwarden.Runtime (
 where
 
 import System.Directory (XdgDirectory (XdgConfig), getXdgDirectory)
-import System.FilePath ((</>))
+import System.Environment (lookupEnv)
+import System.FilePath (isAbsolute, (</>))
 
 data AgentPaths = AgentPaths
   { runtimeDir :: FilePath
@@ -18,8 +19,17 @@ data AgentPaths = AgentPaths
 
 resolveAgentPaths :: FilePath -> IO (Either String AgentPaths)
 resolveAgentPaths baseRuntimeDir = do
-  appDataDir <- getXdgDirectory XdgConfig ("hwarden" </> "bitwarden-cli")
-  pure (deriveAgentPaths baseRuntimeDir appDataDir)
+  appDataDir <- resolveBitwardenCliAppDataDir
+  pure (appDataDir >>= deriveAgentPaths baseRuntimeDir)
+
+resolveBitwardenCliAppDataDir :: IO (Either String FilePath)
+resolveBitwardenCliAppDataDir = do
+  override <- lookupEnv "BITWARDENCLI_APPDATA_DIR"
+  case override of
+    Just path
+      | isAbsolute path -> pure (Right path)
+      | otherwise -> pure (Left "BITWARDENCLI_APPDATA_DIR must be an absolute path")
+    Nothing -> Right <$> getXdgDirectory XdgConfig ("hwarden" </> "bitwarden-cli")
 
 deriveAgentPaths :: FilePath -> FilePath -> Either String AgentPaths
 deriveAgentPaths baseRuntimeDir appDataDir =

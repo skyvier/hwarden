@@ -17,6 +17,7 @@ let
     HWARDEN_SERVER_URL = cfg.serverUrl;
     HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS =
       toString cfg.cacheRefreshIntervalSeconds;
+    BITWARDENCLI_APPDATA_DIR = "%S/hwarden-agent/bitwarden-cli";
   } // cfg.extraEnvironment;
 in
 {
@@ -80,6 +81,8 @@ in
         RestartSec = "5s";
         RuntimeDirectory = "hwarden";
         RuntimeDirectoryMode = "0700";
+        StateDirectory = "hwarden-agent";
+        StateDirectoryMode = "0700";
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectClock = true;
@@ -90,7 +93,7 @@ in
         ProtectKernelModules = true;
         ProtectKernelTunables = true;
         ProtectSystem = "strict";
-        ReadWritePaths = [ "%t/hwarden" ];
+        ReadWritePaths = [ "%t/hwarden" "%S/hwarden-agent" ];
         RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
         RestrictNamespaces = true;
         RestrictRealtime = true;

@@ -26,9 +26,12 @@ assert !(lib.hasAttrByPath [ "services" "hwarden-agent" "bitwardenCliPackage" ] 
 assert !(lib.hasAttr "HWARDEN_BW_PATH" service.environment);
 assert service.environment.HWARDEN_SERVER_URL == "https://vault.bitwarden.com";
 assert service.environment.HWARDEN_CACHE_REFRESH_INTERVAL_SECONDS == "30";
+assert service.environment.BITWARDENCLI_APPDATA_DIR == "%S/hwarden-agent/bitwarden-cli";
 assert lib.hasSuffix "/bin/hwarden-agent" service.serviceConfig.ExecStart;
 assert service.serviceConfig.RuntimeDirectory == "hwarden";
 assert service.serviceConfig.RuntimeDirectoryMode == "0700";
-assert service.serviceConfig.ReadWritePaths == [ "%t/hwarden" ];
+assert service.serviceConfig.StateDirectory == "hwarden-agent";
+assert service.serviceConfig.StateDirectoryMode == "0700";
+assert service.serviceConfig.ReadWritePaths == [ "%t/hwarden" "%S/hwarden-agent" ];
 assert service.wantedBy == [ "default.target" ];
 true

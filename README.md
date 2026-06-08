@@ -89,7 +89,18 @@ systemctl --user enable --now hwarden-agent.service
 The module builds a wrapped agent package by default. That package fixes the
 Bitwarden CLI store path used by `hwarden-agent`; override
 `services.hwarden-agent.package` with a differently built package if you need a
-different CLI version. The main options are:
+different CLI version.
+
+The user service stores the agent's isolated Bitwarden CLI profile under its
+systemd user state directory:
+
+```text
+%S/hwarden-agent/bitwarden-cli
+```
+
+The service sets `BITWARDENCLI_APPDATA_DIR` to that path, so the CLI profile is
+not written under `$HOME/.config` when the service runs with `ProtectHome` and
+`ProtectSystem` hardening. The main options are:
 
 - `services.hwarden-agent.package`
 - `services.hwarden-agent.serverUrl`
@@ -156,13 +167,16 @@ $XDG_CONFIG_HOME/hwarden/bitwarden-cli
 If the derived socket path is longer than the UNIX socket pathname limit, the
 daemon exits before creating runtime directories or starting the socket.
 
-Both directories are created if needed and forced to mode `0700`. If
-`XDG_CONFIG_HOME` is not set, the Bitwarden CLI appdata directory falls back to
+Both directories are created if needed and forced to mode `0700`. Set
+`BITWARDENCLI_APPDATA_DIR` to an absolute path to override the Bitwarden CLI
+appdata directory. This is useful for services where `$HOME` is read-only but a
+persistent service state directory is writable. If the override is unset,
+`XDG_CONFIG_HOME` is used, falling back to
 `$HOME/.config/hwarden/bitwarden-cli`.
 
 The agent keeps its Bitwarden CLI state in its own isolated profile under
-`$XDG_CONFIG_HOME/hwarden/bitwarden-cli`, so it does not share the user's
-default `bw` state. This isolated profile persists across agent restarts and
+the resolved Bitwarden CLI appdata directory, so it does not share the user's
+default `bw` state. This isolated profile can persist across agent restarts and
 system reboots, allowing Bitwarden CLI trusted-device state to survive without
 storing the in-memory `BW_SESSION`.
 
