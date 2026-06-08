@@ -43,6 +43,7 @@ module Hwarden.Agent (
   handleRequest,
   handleRequestWith,
   handleShutdownCleanup,
+  handleShutdownCleanupLoggedWith,
   handleShutdownCleanupWith,
   logShutdownLockOutcome,
   failureResponse,
@@ -391,8 +392,16 @@ data ShutdownLockOutcome
 handleShutdownCleanup :: Env -> MVar AgentState -> IO ()
 handleShutdownCleanup env agentStateVar =
   runAgentT env $ do
-    outcome <- handleShutdownCleanupWith (modifyMVar agentStateVar)
-    logShutdownLockOutcome outcome
+    void $ handleShutdownCleanupLoggedWith (modifyMVar agentStateVar)
+
+handleShutdownCleanupLoggedWith ::
+  (MonadLog m, Bitwarden m) =>
+  ((AgentState -> m (AgentState, Maybe SessionKey)) -> m (Maybe SessionKey)) ->
+  m ShutdownLockOutcome
+handleShutdownCleanupLoggedWith updateAgentState = do
+  outcome <- handleShutdownCleanupWith updateAgentState
+  logShutdownLockOutcome outcome
+  pure outcome
 
 handleShutdownCleanupWith ::
   (Bitwarden m) =>

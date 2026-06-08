@@ -16,6 +16,7 @@ import Data.Data
 import Data.Functor.Identity (Identity (runIdentity))
 import qualified Data.Text as T
 import GHC.TypeLits
+import Hwarden.Agent (handleShutdownCleanupLoggedWith)
 import qualified Hwarden.Agent as Agent
 import qualified Hwarden.Bitwarden as Bitwarden
 import Hwarden.Logging
@@ -28,18 +29,46 @@ tests :: TestTree
 tests =
   testGroup
     "request-log-sanitization"
-    [ testProperty "unlock logs do not expose adversarial backend secrets" $
-        propertyUnlockLogsDoNotExposeSecrets
-    , testProperty "status logs do not expose adversarial backend secrets" $
-        propertyRequestLogsDoNotExposeSecrets Agent.Status
-    , testProperty "list-items logs do not expose adversarial backend secrets" $
-        propertyRequestLogsDoNotExposeSecrets Agent.ListItems
-    , testProperty "get-password logs do not expose adversarial backend secrets" $
-        propertyRequestLogsDoNotExposeSecrets $
-          Agent.GetPasswordRequest (Agent.LoginItemId "login-item-id")
-    , testProperty "unknown request logs do not expose the current session key" $
-        propertyRequestLogsDoNotExposeSecrets Agent.UnknownRequest
+    [ testGroup "handleRequestWith"
+      [ testProperty "unlock logs do not expose adversarial backend secrets" $
+          propertyUnlockLogsDoNotExposeSecrets
+      , testProperty "status logs do not expose adversarial backend secrets" $
+          propertyRequestLogsDoNotExposeSecrets Agent.Status
+      , testProperty "list-items logs do not expose adversarial backend secrets" $
+          propertyRequestLogsDoNotExposeSecrets Agent.ListItems
+      , testProperty "get-password logs do not expose adversarial backend secrets" $
+          propertyRequestLogsDoNotExposeSecrets $
+            Agent.GetPasswordRequest (Agent.LoginItemId "login-item-id")
+      , testProperty "unknown request logs do not expose the current session key" $
+          propertyRequestLogsDoNotExposeSecrets Agent.UnknownRequest
+      ]
+    , testGroup "handleShutdownCleanupLoggedWith"
+      [ testProperty "logs do not expose adversarial backend secrets" $
+          propertyShutdownLockingDoesNotExposeSecrets
+      ]
     ]
+
+propertyShutdownLockingDoesNotExposeSecrets ::
+  LeakingMockEnv "session-key" "password-value" ->
+  AgentStateWithSessionKey "session-key" ->
+  Property
+propertyShutdownLockingDoesNotExposeSecrets
+  (LeakingMockEnv mockEnv)
+  (AgentStateWithSessionKey agentState) =
+    let
+      fakeModifyMvar updateState = snd <$> updateState agentState
+
+      (_, logs) =
+        runLoggingMockBitwarden
+          mockEnv
+          (handleShutdownCleanupLoggedWith fakeModifyMvar)
+     in
+      counterexample (show logs) $
+        assertLogsDoNotExposeSecrets
+          [ "session-key"
+          , "password-value"
+          ]
+          logs
 
 propertyUnlockLogsDoNotExposeSecrets ::
   LeakingMockEnv "session-key" "password-value" ->
