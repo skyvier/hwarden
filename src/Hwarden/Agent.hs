@@ -391,30 +391,20 @@ data ShutdownLockOutcome
 handleShutdownCleanup :: Env -> MVar AgentState -> IO ()
 handleShutdownCleanup env agentStateVar =
   runAgentT env $ do
-    maybeSessionKey <-
-      modifyMVar agentStateVar $ \agentState -> do
-        let (newState, maybeLiveSessionKey) =
-              takeLiveSessionForShutdown agentState
-        pure (newState, maybeLiveSessionKey)
-    outcome <-
-      case maybeSessionKey of
-        Nothing ->
-          pure ShutdownLockSkippedNoLiveSession
-        Just sessionKey ->
-          lockResultToShutdownOutcome <$> lock sessionKey
+    outcome <- handleShutdownCleanupWith (modifyMVar agentStateVar)
     logShutdownLockOutcome outcome
 
-handleShutdownCleanupWith :: (Bitwarden m) => AgentState -> m (AgentState, ShutdownLockOutcome)
-handleShutdownCleanupWith agentState =
-  case takeLiveSessionForShutdown agentState of
-    (_, Nothing) ->
-      pure (Locked, ShutdownLockSkippedNoLiveSession)
-    (newState, Just sessionKey) -> do
-      result <- lock sessionKey
-      pure
-        ( newState
-        , lockResultToShutdownOutcome result
-        )
+handleShutdownCleanupWith ::
+  (Bitwarden m) =>
+  ((AgentState -> m (AgentState, Maybe SessionKey)) -> m (Maybe SessionKey)) ->
+  m ShutdownLockOutcome
+handleShutdownCleanupWith updateAgentState = do
+  maybeSessionKey <- updateAgentState (pure . takeLiveSessionForShutdown)
+  case maybeSessionKey of
+    Nothing ->
+      pure ShutdownLockSkippedNoLiveSession
+    Just sessionKey ->
+      lockResultToShutdownOutcome <$> lock sessionKey
 
 takeLiveSessionForShutdown :: AgentState -> (AgentState, Maybe SessionKey)
 takeLiveSessionForShutdown agentState =
