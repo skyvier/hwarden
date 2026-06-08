@@ -71,7 +71,7 @@ in
   config = lib.mkIf cfg.enable {
     systemd.user.services.hwarden-agent = {
       description = "hwarden-agent Bitwarden session daemon";
-      documentation = [ "https://github.com/skyvier/hwarden-agent" ];
+      documentation = [ "https://github.com/skyvier/hwarden" ];
       wantedBy = [ "default.target" ];
       environment = environment;
 

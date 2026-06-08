@@ -1,4 +1,4 @@
-# hwarden-agent
+# hwarden
 
 <div align="center">
 
@@ -6,7 +6,10 @@ https://github.com/user-attachments/assets/2a3344e5-dd19-4e8c-ac6f-3d1f2f730a51
 
 </div>
 
-`hwarden-agent` is a small Haskell daemon for using Bitwarden CLI from local automation without handing every caller direct access to `BW_SESSION` or the user's normal Bitwarden CLI profile.
+Hwarden is the repository for the `hwarden-agent` daemon. It is a small
+Haskell service for using Bitwarden CLI from local automation without handing
+every caller direct access to `BW_SESSION` or the user's normal Bitwarden CLI
+profile.
 
 The daemon listens on a local Unix socket, accepts a narrow JSON protocol, unlocks Bitwarden CLI with `bw login --raw`, and keeps the resulting session key only in process memory. Responses never include `BW_SESSION`.
 
@@ -223,7 +226,7 @@ nix/module.nix
 and is exported from the flake as:
 
 ```text
-hwarden-agent.nixosModules.default
+hwarden.nixosModules.default
 ```
 
 The module installs `hwarden-agent` as a systemd user service and keeps the socket at the standard per-user path:
@@ -243,17 +246,17 @@ Example:
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    hwarden-agent = {
-      url = "github:skyvier/hbw-tools";
+    hwarden = {
+      url = "github:skyvier/hwarden";
     };
   };
 
-  outputs = { nixpkgs, hwarden-agent, ... }: {
+  outputs = { nixpkgs, hwarden, ... }: {
     nixosConfigurations.example-host = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
 
       modules = [
-        hwarden-agent.nixosModules.default
+        hwarden.nixosModules.default
 
         {
           services.hwarden-agent.enable = true;
@@ -264,9 +267,11 @@ Example:
 }
 ```
 
-Leave `hwarden-agent` to use its own locked `nixpkgs` so the package and module build against the pinned dependencies from this repository.
+Leave `hwarden` to use its own locked `nixpkgs` so the package and module
+build against the pinned dependencies from this repository.
 
-Do not override the `hwarden-agent` input's `nixpkgs` unless you intentionally want to rebuild it against a different dependency set.
+Do not override the `hwarden` input's `nixpkgs` unless you intentionally want
+to rebuild it against a different dependency set.
 
 ### Module options
 
