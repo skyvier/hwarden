@@ -252,6 +252,8 @@ scripts/hwarden-first-login
 That script:
 
 - uses the agent's persistent isolated `BITWARDENCLI_APPDATA_DIR`
+  - when the NixOS user service is installed, this is read from
+    `hwarden-agent.service`
 - configures the same server as the agent
 - runs interactive `bw login`
 - logs out afterward so the agent can later start from its expected state

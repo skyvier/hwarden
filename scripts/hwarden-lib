@@ -26,7 +26,18 @@ hwarden_socket_path() {
 }
 
 hwarden_bw_appdata_dir() {
+  local appdata_dir=${BITWARDENCLI_APPDATA_DIR:-}
   local config_home=${XDG_CONFIG_HOME:-}
+
+  if [ -n "$appdata_dir" ]; then
+    printf '%s\n' "$appdata_dir"
+    return 0
+  fi
+
+  if appdata_dir=$(hwarden_systemd_service_env_value BITWARDENCLI_APPDATA_DIR); then
+    printf '%s\n' "$appdata_dir"
+    return 0
+  fi
 
   if [ -z "$config_home" ]; then
     [ -n "${HOME:-}" ] || hwarden_fail "HOME is not set"
@@ -34,6 +45,29 @@ hwarden_bw_appdata_dir() {
   fi
 
   printf '%s/hwarden/bitwarden-cli\n' "$config_home"
+}
+
+hwarden_systemd_service_env_value() {
+  local key=$1
+  local environment
+  local assignment
+  local value
+
+  command -v systemctl >/dev/null 2>&1 || return 1
+  environment=$(systemctl --user show hwarden-agent.service --property=Environment --value 2>/dev/null) || return 1
+
+  for assignment in $environment; do
+    case "$assignment" in
+      "$key="*)
+        value=${assignment#*=}
+        [ -n "$value" ] || return 1
+        printf '%s\n' "$value"
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
 }
 
 hwarden_server_url() {
