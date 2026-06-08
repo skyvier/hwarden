@@ -29,23 +29,25 @@ tests :: TestTree
 tests =
   testGroup
     "request-log-sanitization"
-    [ testGroup "handleRequestWith"
-      [ testProperty "unlock logs do not expose adversarial backend secrets" $
-          propertyUnlockLogsDoNotExposeSecrets
-      , testProperty "status logs do not expose adversarial backend secrets" $
-          propertyRequestLogsDoNotExposeSecrets Agent.Status
-      , testProperty "list-items logs do not expose adversarial backend secrets" $
-          propertyRequestLogsDoNotExposeSecrets Agent.ListItems
-      , testProperty "get-password logs do not expose adversarial backend secrets" $
-          propertyRequestLogsDoNotExposeSecrets $
-            Agent.GetPasswordRequest (Agent.LoginItemId "login-item-id")
-      , testProperty "unknown request logs do not expose the current session key" $
-          propertyRequestLogsDoNotExposeSecrets Agent.UnknownRequest
-      ]
-    , testGroup "handleShutdownCleanupLoggedWith"
-      [ testProperty "logs do not expose adversarial backend secrets" $
-          propertyShutdownLockingDoesNotExposeSecrets
-      ]
+    [ testGroup
+        "handleRequestWith"
+        [ testProperty "unlock logs do not expose adversarial backend secrets" $
+            propertyUnlockLogsDoNotExposeSecrets
+        , testProperty "status logs do not expose adversarial backend secrets" $
+            propertyRequestLogsDoNotExposeSecrets Agent.Status
+        , testProperty "list-items logs do not expose adversarial backend secrets" $
+            propertyRequestLogsDoNotExposeSecrets Agent.ListItems
+        , testProperty "get-password logs do not expose adversarial backend secrets" $
+            propertyRequestLogsDoNotExposeSecrets $
+              Agent.GetPasswordRequest (Agent.LoginItemId "login-item-id")
+        , testProperty "unknown request logs do not expose the current session key" $
+            propertyRequestLogsDoNotExposeSecrets Agent.UnknownRequest
+        ]
+    , testGroup
+        "handleShutdownCleanupLoggedWith"
+        [ testProperty "logs do not expose adversarial backend secrets" $
+            propertyShutdownLockingDoesNotExposeSecrets
+        ]
     ]
 
 propertyShutdownLockingDoesNotExposeSecrets ::
