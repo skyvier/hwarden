@@ -150,18 +150,21 @@ The daemon creates:
 
 ```text
 $XDG_RUNTIME_DIR/hwarden/agent.sock
-$XDG_RUNTIME_DIR/hwarden/bitwarden-cli
+$XDG_CONFIG_HOME/hwarden/bitwarden-cli
 ```
 
 If the derived socket path is longer than the UNIX socket pathname limit, the
 daemon exits before creating runtime directories or starting the socket.
 
-Both directories are created if needed and forced to mode `0700`.
+Both directories are created if needed and forced to mode `0700`. If
+`XDG_CONFIG_HOME` is not set, the Bitwarden CLI appdata directory falls back to
+`$HOME/.config/hwarden/bitwarden-cli`.
 
 The agent keeps its Bitwarden CLI state in its own isolated profile under
-`$XDG_RUNTIME_DIR/hwarden/bitwarden-cli`, so it does not share the user's
-default `bw` state. This isolated profile is session-scoped and is not expected
-to persist across reboot.
+`$XDG_CONFIG_HOME/hwarden/bitwarden-cli`, so it does not share the user's
+default `bw` state. This isolated profile persists across agent restarts and
+system reboots, allowing Bitwarden CLI trusted-device state to survive without
+storing the in-memory `BW_SESSION`.
 
 ## Protocol
 
@@ -234,7 +237,7 @@ scripts/hwarden-first-login
 
 That script:
 
-- uses the agent's isolated `BITWARDENCLI_APPDATA_DIR`
+- uses the agent's persistent isolated `BITWARDENCLI_APPDATA_DIR`
 - configures the same server as the agent
 - runs interactive `bw login`
 - logs out afterward so the agent can later start from its expected state

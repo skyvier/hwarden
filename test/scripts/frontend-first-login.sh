@@ -8,8 +8,10 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 BW_LOG="$TMP_DIR/bw.log"
 RUNTIME_DIR="$TMP_DIR/runtime"
+CONFIG_DIR="$TMP_DIR/config"
 
 mkdir -p "$RUNTIME_DIR"
+mkdir -p "$CONFIG_DIR"
 
 cat >"$TMP_DIR/bw" <<'EOF'
 #!/usr/bin/env bash
@@ -22,10 +24,11 @@ chmod +x "$TMP_DIR/bw"
 export BW_LOG
 export HWARDEN_BW_PATH="$TMP_DIR/bw"
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
+export XDG_CONFIG_HOME="$CONFIG_DIR"
 
 "$ROOT_DIR/scripts/hwarden-first-login"
 
-expected_appdata="$RUNTIME_DIR/hwarden/bitwarden-cli"
+expected_appdata="$CONFIG_DIR/hwarden/bitwarden-cli"
 
 grep -F "$expected_appdata|logout" "$BW_LOG" >/dev/null
 grep -F "$expected_appdata|config server https://vault.bitwarden.eu" "$BW_LOG" >/dev/null

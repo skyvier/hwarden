@@ -201,6 +201,7 @@ tests =
           withAgentEnv
             defaultAgentConfig{agentPathOverride = Just ""}
             "/tmp/runtime"
+            "/tmp/config"
             "/tmp/fake-bw"
             $ \_ -> do
               mHwardenBwPath <- lookupEnv "HWARDEN_BW_PATH"
@@ -654,7 +655,13 @@ withAgent hwardenAgent workDir agentEnv cont =
 withConfiguredAgent :: AgentConfig -> (AgentResource -> IO a) -> IO a
 withConfiguredAgent agentConfig cont =
   withTempDirectory "/tmp" "hwarden-agent-test" $ \tmpDir -> do
-    paths <- either fail pure (Runtime.deriveAgentPaths (tmpDir </> "runtime"))
+    let configDir = tmpDir </> "config"
+        persistentAppDataDir = configDir </> "hwarden" </> "bitwarden-cli"
+    paths <-
+      either fail pure $
+        Runtime.deriveAgentPaths
+          (tmpDir </> "runtime")
+          persistentAppDataDir
     let fakeBinDir = tmpDir </> "bin"
         fakeBwPath = fakeBinDir </> "bw"
         serverUrl = determineBitwardenServerUrl (agentServerUrl agentConfig)
@@ -669,6 +676,7 @@ withConfiguredAgent agentConfig cont =
     withAgentEnv
       agentConfig
       (Runtime.runtimeDir paths)
+      configDir
       fakeBwPath
       $ \agentEnv -> do
         withAgent hwardenAgent tmpDir agentEnv $ \handle ->
@@ -1128,13 +1136,15 @@ withAgentEnv ::
   AgentConfig ->
   FilePath ->
   FilePath ->
+  FilePath ->
   ([(String, String)] -> IO a) ->
   IO a
-withAgentEnv agentConfig runtimeDir fakeBwPath cont =
+withAgentEnv agentConfig runtimeDir configDir fakeBwPath cont =
   withServerUrl
     . withRefreshInterval
     . withBwPathMode
     . withPathOverride
+    . withConfigHome
     . withEnvVarOverride "XDG_RUNTIME_DIR" (Just runtimeDir)
     $ getEnvironment >>= cont
  where
@@ -1154,3 +1164,5 @@ withAgentEnv agentConfig runtimeDir fakeBwPath cont =
     case agentPathOverride agentConfig of
       Nothing -> id
       Just newPath -> withEnvVarOverride "PATH" (Just newPath)
+  withConfigHome =
+    withEnvVarOverride "XDG_CONFIG_HOME" (Just configDir)

@@ -33,6 +33,9 @@ Using a dedicated `BITWARDENCLI_APPDATA_DIR` for `hwarden-agent` should isolate:
 - very likely server configuration as well
 
 This is the most promising direction for separating the agent's Bitwarden CLI state from the user's normal `bw` usage.
+The agent uses `$XDG_CONFIG_HOME/hwarden/bitwarden-cli`, with the normal
+`$HOME/.config/hwarden/bitwarden-cli` fallback, so CLI appdata survives service
+restarts and system reboots while the `BW_SESSION` remains process-local.
 
 ### Session handling note
 
@@ -46,6 +49,8 @@ Source:
 
 - Give the agent its own dedicated `BITWARDENCLI_APPDATA_DIR`.
 - Keep that directory separate from the user's default Bitwarden CLI directory.
+- Keep the directory in persistent XDG config storage rather than
+  `$XDG_RUNTIME_DIR`, so trusted-device state survives reboot.
 - Consider using `--session` for vault-access commands where practical, even if `BITWARDENCLI_APPDATA_DIR` is the main isolation mechanism.
 
 ### Confidence

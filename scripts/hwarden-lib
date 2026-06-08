@@ -26,8 +26,14 @@ hwarden_socket_path() {
 }
 
 hwarden_bw_appdata_dir() {
-  hwarden_require_runtime_dir
-  printf '%s/hwarden/bitwarden-cli\n' "$XDG_RUNTIME_DIR"
+  local config_home=${XDG_CONFIG_HOME:-}
+
+  if [ -z "$config_home" ]; then
+    [ -n "${HOME:-}" ] || hwarden_fail "HOME is not set"
+    config_home="$HOME/.config"
+  fi
+
+  printf '%s/hwarden/bitwarden-cli\n' "$config_home"
 }
 
 hwarden_server_url() {

@@ -108,7 +108,7 @@ runAgentT env =
 
 initAgentEnv :: FilePath -> IO Env
 initAgentEnv runtimeDir = do
-  paths <- either fail pure (Runtime.deriveAgentPaths runtimeDir)
+  paths <- Runtime.resolveAgentPaths runtimeDir >>= either fail pure
   let isolatedBitwardenCliAppDataDir =
         Runtime.bitwardenCliAppDataDir paths
   cliPathValue <- lookupEnv "HWARDEN_BW_PATH"
