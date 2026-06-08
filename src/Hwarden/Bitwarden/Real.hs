@@ -12,6 +12,7 @@ module Hwarden.Bitwarden.Real (
 where
 
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (race)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (MonadReader, asks)
 import Data.Aeson (eitherDecodeStrict)
@@ -45,7 +46,6 @@ import System.Process (
   ProcessHandle,
   StdStream (CreatePipe, NoStream),
   createProcess,
-  getProcessExitCode,
   proc,
   readCreateProcessWithExitCode,
   terminateProcess,
@@ -254,22 +254,14 @@ lockTerminateWaitMicroseconds :: Int
 lockTerminateWaitMicroseconds = 500000
 
 waitForProcessExitWithTimeout :: ProcessHandle -> Int -> IO (Maybe ExitCode)
-waitForProcessExitWithTimeout processHandle timeoutMicroseconds =
-  go timeoutMicroseconds
- where
-  pollIntervalMicroseconds = 50000
-  go remainingMicroseconds = do
-    result <- getProcessExitCode processHandle
-    case result of
-      Just exitCode ->
-        pure (Just exitCode)
-      Nothing
-        | remainingMicroseconds <= 0 ->
-            pure Nothing
-        | otherwise -> do
-            let delayMicroseconds = min pollIntervalMicroseconds remainingMicroseconds
-            threadDelay delayMicroseconds
-            go (remainingMicroseconds - delayMicroseconds)
+waitForProcessExitWithTimeout processHandle timeoutMicroseconds
+  | timeoutMicroseconds <= 0 = pure Nothing
+  | otherwise = do
+      result <- race (threadDelay timeoutMicroseconds) (waitForProcess processHandle)
+      pure $
+        case result of
+          Left () -> Nothing
+          Right exitCode -> Just exitCode
 
 handleCheckedCommand ::
   (MonadIO m) =>
